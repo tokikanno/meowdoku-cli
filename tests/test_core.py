@@ -6,7 +6,7 @@ from pathlib import Path
 
 import itertools
 
-from meowdoku.game_view import BOX
+from meowdoku.game_view import BOX, line_code
 from meowdoku.levels import LevelError, LevelStore, Progress, parse_level
 from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game
 from meowdoku.solver import solve
@@ -393,6 +393,15 @@ class PairPoolTest(unittest.TestCase):
         self.assertEqual(inits[-1], (250, 99, 0))
         self.assertNotEqual(pool.get(0, 0), 250)  # (0, 0) had to get a new number
         self.assertTrue(all(p < 256 for p, _, _ in inits))
+
+
+class LineCodeTest(unittest.TestCase):
+    def test_rows_differ_in_two_bits(self):
+        for n in range(6, 13):
+            codes = [line_code(y, n) for y in range(60)]
+            for a in range(60):
+                for b in range(a + 1, min(60, a + (1 << (n - 1)))):
+                    self.assertGreaterEqual(bin(codes[a] ^ codes[b]).count('1'), 2, (n, a, b))
 
 
 class BoxTest(unittest.TestCase):

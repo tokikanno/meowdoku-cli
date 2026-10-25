@@ -27,6 +27,7 @@ STYLES = ['grid', 'lines', 'blocks']  # the order `b` cycles through
 DEFAULT_STYLE = 'blocks'  # falls back to grid without 256 colors
 STYLE_NAMES = {'grid': '框線版', 'lines': '全格線版', 'blocks': '色塊版'}
 LABEL_W = 3  # room for the row letters left of the board
+NBSP = '\u00a0'
 CHROME_H = 7  # header + column labels above the board, gap + 4 footer lines below
 
 HELP = [
@@ -76,6 +77,14 @@ def _box_chars():
 
 
 BOX = _box_chars()
+
+
+def line_code(y, n):
+    """n bits for screen row y: y's low n-1 bits in bits 1.., their parity in bit 0.
+    Any two rows less than 2**(n-1) apart differ in at least two bits, so they still
+    differ when the cursor's brackets hide one cell's bit."""
+    v = y % (1 << (n - 1))
+    return v << 1 | bin(v).count('1') & 1
 
 BATCH_SIDES = {'H': (0, -1), 'L': (0, 1), 'K': (-1, 0), 'J': (1, 0)}
 
@@ -217,14 +226,20 @@ class GameView(Screen):
         g = self.game
         st = g.board[r][c]
         attr = self.colors.region(g.region(r, c), dim=st == MARK)
+        on_cursor = brackets and (r, c) == self.cur
         for dy in range(ch):
-            self.put(y + dy, x, ' ' * cw, attr)
+            # A cell's first column is ' ' or a look-alike no-break space, chosen so no
+            # two board lines hold the same characters (see line_code). ncurses compares
+            # lines by characters only; equal ones made it "scroll" the board on a move
+            # and repaint it, which flickers.
+            mark = NBSP if line_code(y + dy, g.n) >> c & 1 and not on_cursor else ' '
+            self.put(y + dy, x, mark + ' ' * (cw - 1), attr)
         sym = self.symbols[st]
         if not sym and not self.colors.rich:
             sym = chr(ord('a') + g.region(r, c))
         if sym:
             self.put(y + (ch - 1) // 2, x + (cw - text_width(sym)) // 2, sym, attr | curses.A_BOLD)
-        if brackets and (r, c) == self.cur:
+        if on_cursor:
             cursor = self.colors.cursor
             if self.colors.rich:  # yellow brackets on the cell's own background
                 cursor = self.colors.pair(self.colors.cursor_fg, self.cell_slot(r, c)) | curses.A_BOLD
