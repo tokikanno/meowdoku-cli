@@ -4,7 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from meowdoku.levels import LevelError, LevelStore, parse_level
+import itertools
+
+from meowdoku.game_view import BOX
+from meowdoku.levels import LevelError, LevelStore, Progress, parse_level
 from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game
 from meowdoku.solver import solve
 
@@ -146,6 +149,37 @@ class StoreTest(unittest.TestCase):
             (Path(d) / 'manifest.json').write_text(json.dumps(manifest))
             with self.assertRaises(LevelError):
                 LevelStore(d).load('6', 1)
+
+
+class ProgressTest(unittest.TestCase):
+    def test_record_keeps_best(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'sub' / 'progress.json'
+            p = Progress(path)
+            p.record('8', 3, 2)
+            p.record('8', 3, 1)
+            p.set_last('8', 3)
+            p = Progress(path)  # reload from disk
+            self.assertEqual(p.get('8', 3), 2)
+            self.assertEqual(p.cleared('8'), 1)
+            self.assertEqual(p.unsolved('8', 4), [1, 2, 4])
+            self.assertEqual(p.last, {'pack': '8', 'level': 3})
+
+    def test_corrupt_file_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'progress.json'
+            path.write_text('not json')
+            self.assertEqual(Progress(path).stars, {})
+
+
+class BoxTest(unittest.TestCase):
+    def test_every_weight_combination(self):
+        for key in itertools.product(range(3), repeat=4):
+            if any(key):
+                self.assertIn(key, BOX)
+        self.assertEqual(BOX[1, 1, 1, 1], '┼')
+        self.assertEqual(BOX[2, 2, 1, 1], '╂')
+        self.assertEqual(BOX[0, 2, 0, 2], '┏')
 
 
 if __name__ == '__main__':

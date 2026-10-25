@@ -127,3 +127,52 @@ class LevelStore:
         if not 1 <= idx <= len(levels):
             raise LevelError(f'pack {pack} 只有第 1～{len(levels)} 關')
         return parse_level(levels[idx - 1])
+
+
+def data_dir():
+    base = os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share'
+    return Path(base) / 'meowdoku'
+
+
+class Progress:
+    """Cleared levels as {"pack:idx": stars}, the web game's `meowdoku_done` format."""
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else data_dir() / 'progress.json'
+        self.stars = {}
+        self.last = {}
+        try:
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+            self.stars = {k: int(v) for k, v in data.get('stars', {}).items()}
+            self.last = data.get('last', {})
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def get(self, pack, idx):
+        return self.stars.get(f'{pack}:{idx}', 0)
+
+    def record(self, pack, idx, stars):
+        key = f'{pack}:{idx}'
+        self.stars[key] = max(self.stars.get(key, 0), stars)
+        self.save()
+
+    def set_last(self, pack, idx):
+        self.last = {'pack': pack, 'level': idx}
+        self.save()
+
+    def cleared(self, pack):
+        prefix = f'{pack}:'
+        return sum(1 for k in self.stars if k.startswith(prefix))
+
+    def unsolved(self, pack, count):
+        return [i for i in range(1, count + 1) if f'{pack}:{i}' not in self.stars]
+
+    def save(self):
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix('.tmp')
+            tmp.write_text(json.dumps({'v': 1, 'stars': self.stars, 'last': self.last},
+                                      ensure_ascii=False, sort_keys=True), encoding='utf-8')
+            tmp.replace(self.path)
+        except OSError:
+            pass  # progress is a convenience; never crash the game over it
