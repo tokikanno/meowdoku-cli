@@ -16,8 +16,15 @@ REGION_COLORS_DIM = [
 ]
 
 TOAST_SECONDS = 1.0
-CTRL_R, CTRL_X, ESC = '\x12', '\x18', '\x1b'
+CTRL_G, CTRL_R, CTRL_X, ESC = '\x07', '\x12', '\x18', '\x1b'
 ENTER = ('\n', '\r', curses.KEY_ENTER)
+SHIFT_MOVES = {
+    curses.KEY_SR: (-1, 0), curses.KEY_SF: (1, 0),
+    curses.KEY_SLEFT: (0, -1), curses.KEY_SRIGHT: (0, 1),
+}
+# Shift+arrow as xterm sends it, for terminals whose terminfo entry lacks these keys.
+SHIFT_ARROW_SEQS = {'[1;2A': curses.KEY_SR, '[1;2B': curses.KEY_SF,
+                    '[1;2C': curses.KEY_SRIGHT, '[1;2D': curses.KEY_SLEFT}
 MOVES = {
     curses.KEY_UP: (-1, 0), curses.KEY_DOWN: (1, 0),
     curses.KEY_LEFT: (0, -1), curses.KEY_RIGHT: (0, 1),
@@ -203,7 +210,7 @@ class Screen:
         return key
 
     def read_escape(self):
-        """After a bare ESC: ESC itself, or None for a sequence we ignore (Alt+key etc.).
+        """After a bare ESC: ESC itself, a Shift+arrow key, or None for a sequence we ignore.
         curses already decodes the sequences it knows (arrows etc.), so what's left is
         either a real Esc press or a sequence terminfo doesn't describe."""
         self.scr.timeout(0)
@@ -219,7 +226,9 @@ class Screen:
                     break
         except curses.error:
             pass  # nothing more queued
-        return ESC if not seq else None
+        if not seq:
+            return ESC
+        return SHIFT_ARROW_SEQS.get(seq)
 
     def draw(self):
         raise NotImplementedError

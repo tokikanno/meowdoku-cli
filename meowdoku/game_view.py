@@ -2,10 +2,12 @@
 
 import curses
 import itertools
+import re
 import unicodedata
 
 from .model import CAT, EMPTY, GUESS, HEARTS_MAX, MARK, WRONG
-from .term import CTRL_R, CTRL_X, ENTER, ESC, MOVES, Screen, text_width
+from .term import (CTRL_G, CTRL_R, CTRL_X, ENTER, ESC, MOVES, SHIFT_MOVES, Screen,
+                   text_width)
 
 SYMBOLS = {EMPTY: '', MARK: '×', GUESS: '△', CAT: '🐱', WRONG: '╳'}
 SYMBOLS_ASCII = {EMPTY: '', MARK: 'x', GUESS: '?', CAT: '@', WRONG: '!'}
@@ -14,14 +16,21 @@ SYMBOLS_ASCII = {EMPTY: '', MARK: 'x', GUESS: '?', CAT: '@', WRONG: '!'}
 # With grid lines a cell's pitch is one more than its size in each direction.
 CELL_SIZES = [(7, 3, True), (3, 1, True), (4, 1, False)]
 LABEL_W = 3  # room for the row letters left of the board
-CHROME_H = 6  # header + column labels above the board, gap + 3 footer lines below
+CHROME_H = 7  # header + column labels above the board, gap + 4 footer lines below
 
 HELP = [
-    ('方向鍵 / hjkl', '移動'),
+    ('方向鍵 / hjkl', '移動，到邊界從另一邊出現'),
     ('Space', '標記／取消標記（依模式寫入 {X} 或 {G}）'),
     ('g', '切換標記模式：無貓 {X} ↔ 猜測 {G}'),
     ('Enter', '翻開，翻錯扣一格生命'),
     ('Enter（貓上）', '跳到下一個唯一沒標記的格子並翻開'),
+    ('Shift+方向鍵', '拖拽標記：起點沒標記就一路標記，有標記就一路清除'),
+    ('v', '連續標記模式：移動時一路標記，再按 v 或 Esc 結束'),
+    ('H / L', '同色格子中，目前格子左／右側的全部標記'),
+    ('K / J', '同色格子中，目前格子上／下方的全部標記'),
+    ('s', '同色剩下的格子都在同一行／列時，標記推得出的格子'),
+    ('Ctrl-G', '清除所有猜測 {G}'),
+    (':', '跳到指定格子：字母 + 數字，例如 c5'),
     ('a', '切換翻開後自動標記'),
     ('t', '切換座標提示'),
     ('u / Ctrl-R', 'undo / redo'),
@@ -56,6 +65,8 @@ def _box_chars():
 
 BOX = _box_chars()
 
+BATCH_SIDES = {'H': (0, -1), 'L': (0, 1), 'K': (-1, 0), 'J': (1, 0)}
+
 
 class GameView(Screen):
     """Plays one level. run() returns 'quit', 'menu', 'next' or 'restart'."""
@@ -74,6 +85,8 @@ class GameView(Screen):
         self.hearts = ('*', '.') if ascii else ('♥', '♡')
         self.cur = (0, 0)
         self.modal = None  # None | 'help' | 'quit' | 'menu' | 'restart' | 'over'
+        self.drag = None  # {'target': state painted, 'sticky': True for v mode}
+        self.prompt = None  # text typed after ':', while jumping
         self.result = None
 
     # ── drawing ──────────────────────────────────────────────────────────────
@@ -101,7 +114,7 @@ class GameView(Screen):
         g = 1 if grid else 0
         bx, by = x0 + LABEL_W, y0 + 2  # top-left of the board (of its frame, with a grid)
         self.draw_header(y0, x0)
-        if self.settings.get('show_coords'):
+        if self.settings.get('show_coords') or self.prompt is not None:
             self.draw_coords(bx + g, by + g, cw + g, ch + g, cw, ch)
         n = self.game.n
         for r in range(n):
@@ -116,7 +129,13 @@ class GameView(Screen):
     def draw_overlay(self):
         if self.modal == 'help':
             marks = {'X': self.symbols[MARK], 'G': self.symbols[GUESS]}
-            rows = [k + ' ' * (18 - text_width(k)) + v.format(**marks) for k, v in HELP]
+            rows = [k + ' ' * (16 - text_width(k)) + v.format(**marks) for k, v in HELP]
+            if len(rows) + 6 > self.scr.getmaxyx()[0]:
+                # Too short for one column: put the second half beside the first.
+                half = (len(rows) + 1) // 2
+                left, right = rows[:half], rows[half:] + ['']
+                width = max(text_width(t) for t in left) + 3
+                rows = [a + ' ' * (width - text_width(a)) + b for a, b in zip(left, right)]
             self.draw_box(['操作說明', ''] + rows + ['', '按任意鍵關閉'], center=False)
         elif self.modal == 'quit':
             self.draw_box(['離開？(y/n)'])
@@ -135,7 +154,8 @@ class GameView(Screen):
         mode = f'猜測 {self.symbols[GUESS]}' if g.guess_mode else f'無貓 {self.symbols[MARK]}'
         for text, attr in ((f'{self.title}  {hearts}  ', curses.A_BOLD),
                            (f' {mode} ', curses.A_REVERSE if g.guess_mode else curses.A_BOLD),
-                           (f'  自動標記:{"開" if g.auto_mark else "關"}', 0)):
+                           (f'  自動標記:{"開" if g.auto_mark else "關"}', 0),
+                           (self.drag_label(), curses.A_REVERSE)):
             self.put(y, x, text, attr)
             x += text_width(text)
 
@@ -225,11 +245,22 @@ class GameView(Screen):
             self.put(y, x, '過關！  ' + self.over_keys(), curses.A_BOLD)
         elif g.lost:
             self.put(y, x, '生命用完了  ' + self.over_keys(), curses.A_BOLD)
+        elif self.prompt is not None:
+            self.put(y, x, f'跳到：{self.prompt}_   字母選行、數字選列，例如 c5 · Enter 確定 · Esc 取消',
+                     curses.A_BOLD)
         else:
             self.put(y, x, f'貓 {g.cats}/{g.n}')
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
-        self.put(y + 2, x, f'r 重來  {"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
+        self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  HJKL 同色批次  s 輔助  : 跳轉',
                  curses.A_DIM)
+        self.put(y + 3, x, f'r 重來  {"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
+                 curses.A_DIM)
+
+    def drag_label(self):
+        if not self.drag:
+            return ''
+        what = '清除' if self.drag['target'] == EMPTY else '標記'
+        return f'  {"連續" if self.drag["sticky"] else "拖拽"}{what} '
 
     def over_keys(self):
         keys = ['n 下一關'] if self.has_next else []
@@ -270,6 +301,20 @@ class GameView(Screen):
 
     def handle_key(self, key):
         g = self.game
+        if self.prompt is not None:
+            self.handle_prompt(key)
+            return
+        if key in SHIFT_MOVES:
+            self.drag_move(SHIFT_MOVES[key], sticky=False)
+            return
+        if self.drag and self.drag['sticky']:
+            if key in MOVES:
+                self.drag_move(MOVES[key], sticky=True)
+                return
+            if key in ('v', ESC):
+                self.end_drag()
+                return
+        self.end_drag()  # any other key ends a drag, closing its undo step
         r, c = self.cur
         if key in MOVES:
             dr, dc = MOVES[key]
@@ -285,6 +330,17 @@ class GameView(Screen):
                     self.reveal(*cell)
             else:
                 self.reveal(r, c)
+        elif key == 'v':
+            self.start_drag(sticky=True)
+        elif key in BATCH_SIDES:
+            g.mark_side(r, c, *BATCH_SIDES[key])
+        elif key == 's':
+            if not g.over and not g.assist(r, c):
+                self.show_toast('s 不適用：這個顏色剩下的格子不在同一行或同一列')
+        elif key == CTRL_G:
+            g.clear_guesses()
+        elif key == ':':
+            self.prompt = ''
         elif key == 'g':
             g.guess_mode = not g.guess_mode
         elif key == 'a':
@@ -310,6 +366,51 @@ class GameView(Screen):
             self.modal = 'help'
         elif key == 'q':
             self.modal = 'quit'
+
+    # ── drag ─────────────────────────────────────────────────────────────────
+    # A drag is one open transaction in the model, so the whole stroke undoes at once.
+
+    def start_drag(self, sticky):
+        g = self.game
+        if g.over:
+            return
+        r, c = self.cur
+        g.begin()
+        self.drag = {'target': g.drag_target(r, c), 'sticky': sticky}
+        g.drag_paint(r, c, self.drag['target'])
+
+    def drag_move(self, delta, sticky):
+        if self.drag is None or self.drag['sticky'] != sticky:
+            self.end_drag()
+            self.start_drag(sticky)
+        n = self.game.n
+        self.cur = ((self.cur[0] + delta[0]) % n, (self.cur[1] + delta[1]) % n)
+        if self.drag:
+            self.game.drag_paint(*self.cur, self.drag['target'])
+
+    def end_drag(self):
+        if self.drag:
+            self.game.end()
+            self.drag = None
+
+    # ── jump ─────────────────────────────────────────────────────────────────
+
+    def handle_prompt(self, key):
+        if key in ENTER:
+            text, self.prompt = self.prompt, None
+            m = re.fullmatch(r'\s*([a-zA-Z])\s*(\d+)\s*', text)
+            n = self.game.n
+            if m and ord(m[1].upper()) - ord('A') < n and 1 <= int(m[2]) <= n:
+                self.cur = (ord(m[1].upper()) - ord('A'), int(m[2]) - 1)
+            elif text.strip():
+                last = chr(ord('A') + n - 1)
+                self.show_toast(f'座標要是 A～{last} 加上 1～{n}，例如 c5')
+        elif key == ESC:
+            self.prompt = None
+        elif key in (curses.KEY_BACKSPACE, '\x7f', '\b'):
+            self.prompt = self.prompt[:-1]
+        elif isinstance(key, str) and (key.isalnum() or key == ' ') and len(self.prompt) < 4:
+            self.prompt += key
 
     def leave(self, result):
         """Leave the level, asking first if that would throw away progress."""

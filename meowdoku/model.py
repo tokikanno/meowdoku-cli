@@ -57,6 +57,9 @@ class Game:
     def in_bounds(self, r, c):
         return 0 <= r < self.n and 0 <= c < self.n
 
+    def region_cells(self, reg):
+        return [(r, c) for r in range(self.n) for c in range(self.n) if self.region(r, c) == reg]
+
     # ── transactions ─────────────────────────────────────────────────────────
     # Every change goes through _set inside a begin/end pair, so a whole
     # gesture (a keypress, a batch, a drag) becomes exactly one undo step.
@@ -133,12 +136,8 @@ class Game:
         tentative, and revealing on a guess could cost a heart."""
         n = self.n
         units = ([[(r, c) for c in range(n)] for r in range(n)]
-                 + [[(r, c) for r in range(n)] for c in range(n)])
-        regions = {}
-        for r in range(n):
-            for c in range(n):
-                regions.setdefault(self.region(r, c), []).append((r, c))
-        units += regions.values()
+                 + [[(r, c) for r in range(n)] for c in range(n)]
+                 + [self.region_cells(reg) for reg in range(n)])
         forced = set()
         for unit in units:
             states = [self.board[r][c] for r, c in unit]
@@ -157,6 +156,85 @@ class Game:
                         or (abs(i - r) <= 1 and abs(j - c) <= 1)):
                     if self.board[i][j] in (EMPTY, GUESS):
                         self._set(i, j, MARK)
+
+    # ── batch operations ─────────────────────────────────────────────────────
+    # These write the current mode's mark (× or △) and never toggle, so running
+    # one twice is harmless. Each is one undo step.
+
+    @property
+    def mode_mark(self):
+        return GUESS if self.guess_mode else MARK
+
+    def _paint(self, r, c, target):
+        """Mark (target = mode mark) or erase (target = EMPTY) one cell, if allowed.
+        Marking turns a guess into a certain mark but never a mark into a guess;
+        erasing only clears the current mode's mark."""
+        cur = self.board[r][c]
+        if target == EMPTY:
+            ok = cur == self.mode_mark
+        elif target == MARK:
+            ok = cur in (EMPTY, GUESS)
+        else:
+            ok = cur == EMPTY
+        if ok:
+            self._set(r, c, target)
+
+    def _paint_all(self, cells, target=None):
+        if self.over:
+            return
+        self.begin()
+        for r, c in cells:
+            self._paint(r, c, self.mode_mark if target is None else target)
+        self.end()
+
+    def drag_target(self, r, c):
+        """Dragging from this cell erases if it already holds the mode's mark, else marks."""
+        return EMPTY if self.board[r][c] == self.mode_mark else self.mode_mark
+
+    def drag_paint(self, r, c, target):
+        """Paint inside an open transaction: the caller wraps a whole drag in begin/end."""
+        if not self.over:
+            self._paint(r, c, target)
+
+    def mark_side(self, r, c, dr, dc):
+        """Mark the cells of this region beyond (r, c) in one direction, across the whole
+        board: dc = 1 → every same-region cell in a column right of c, and so on."""
+        cells = [(i, j) for i, j in self.region_cells(self.region(r, c))
+                 if (dr and (i - r) * dr > 0) or (dc and (j - c) * dc > 0)]
+        self._paint_all(cells)
+
+    def assist(self, r, c):
+        """Marks implied by this region's open cells all lying on one row or column:
+        the rest of that line, plus any cell touching every open cell (which covers
+        runs of 2–3 and the C·C pattern with one marked cell between).
+        Returns False (and changes nothing) when the region doesn't qualify."""
+        cells = self.region_cells(self.region(r, c))
+        if any(self.board[i][j] == CAT for i, j in cells):
+            return False
+        cand = [(i, j) for i, j in cells if self.board[i][j] in (EMPTY, GUESS)]
+        if len(cand) < 2:
+            return False
+        if len({i for i, _ in cand}) == 1:
+            line = [(cand[0][0], j) for j in range(self.n)]
+        elif len({j for _, j in cand}) == 1:
+            line = [(i, cand[0][1]) for i in range(self.n)]
+        else:
+            return False
+        out = [cell for cell in line if cell not in cand]
+        out += [(i, j) for i in range(self.n) for j in range(self.n)
+                if (i, j) not in cand
+                and all(abs(i - ci) <= 1 and abs(j - cj) <= 1 for ci, cj in cand)]
+        self._paint_all(out)
+        return True
+
+    def clear_guesses(self):
+        cells = [(r, c) for r in range(self.n) for c in range(self.n) if self.board[r][c] == GUESS]
+        if self.over or not cells:
+            return
+        self.begin()
+        for r, c in cells:
+            self._set(r, c, EMPTY)
+        self.end()
 
     # ── undo / redo ──────────────────────────────────────────────────────────
     # Undo never refunds a heart and redo charges it again, as in the web game.

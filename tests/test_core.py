@@ -154,6 +154,124 @@ class GameTest(unittest.TestCase):
         self.assertEqual(len(g.undo_stack), n)
 
 
+# AAACCB
+# ACACCB
+# CCCCCC
+# DEECCF
+# DEEECF
+# DEEEFF
+def marked(g):
+    return {(r, c) for r in range(g.n) for c in range(g.n) if g.board[r][c] != EMPTY}
+
+
+class BatchTest(unittest.TestCase):
+    def test_mark_side_right(self):
+        g = new_game()
+        g.mark_side(3, 1, 0, 1)  # region E right of column 2: columns 3, 4 of rows D-F
+        self.assertEqual(marked(g), {(3, 2), (4, 2), (4, 3), (5, 2), (5, 3)})
+        self.assertEqual(len(g.undo_stack), 1)
+
+    def test_mark_side_up_and_guess_mode(self):
+        g = new_game()
+        g.guess_mode = True
+        g.mark_side(1, 0, -1, 0)  # region A above row B: row A only
+        self.assertEqual(marked(g), {(0, 0), (0, 1), (0, 2)})
+        self.assertEqual(g.board[0][0], GUESS)
+
+    def test_mark_side_never_toggles(self):
+        g = new_game()
+        g.toggle_mark(0, 4)
+        g.mark_side(0, 3, 0, 1)
+        g.mark_side(0, 3, 0, 1)
+        self.assertEqual(g.board[0][4], MARK)
+
+    def test_assist_two_in_a_row(self):
+        g = new_game()
+        # Region B is (0,5), (1,5): already a vertical pair.
+        self.assertTrue(g.assist(0, 5))
+        expected = {(r, 5) for r in range(2, 6)} | {(0, 4), (1, 4)}
+        self.assertEqual(marked(g), expected)
+
+    def test_assist_three_in_a_row(self):
+        g = new_game()
+        # Region F: (3,5), (4,5), (5,4), (5,5). Mark (5,4) → (3,5), (4,5), (5,5) vertical.
+        g.toggle_mark(5, 4)
+        self.assertTrue(g.assist(3, 5))
+        self.assertIn((0, 5), marked(g))
+        self.assertIn((4, 4), marked(g))  # touches all three
+        self.assertNotIn((3, 4), marked(g))  # misses (5, 5)
+
+    def test_assist_not_applicable(self):
+        g = new_game()
+        self.assertFalse(g.assist(0, 0))  # region A has five open cells
+        g.toggle_mark(0, 5)
+        g.toggle_mark(1, 5)
+        self.assertFalse(g.assist(0, 5))  # region B has none left
+        self.assertEqual(len(g.undo_stack), 2)
+
+    def test_assist_needs_one_line(self):
+        g = new_game()
+        # Region F: mark (4,5) → (3,5), (5,4), (5,5) not in one line.
+        g.toggle_mark(4, 5)
+        self.assertFalse(g.assist(3, 5))
+
+    def test_assist_line_lock_any_count(self):
+        g = new_game()
+        # Region C keeps only row C (2,0)..(2,5): six open cells, all in one row.
+        for cell in [(0, 3), (0, 4), (1, 1), (1, 3), (1, 4), (3, 3), (3, 4), (4, 4)]:
+            g.toggle_mark(*cell)
+        before = marked(g)
+        self.assertTrue(g.assist(2, 0))
+        self.assertEqual(marked(g), before)  # the whole row is the region: nothing else
+
+    def test_assist_line_lock_marks_rest_of_column(self):
+        g = new_game()
+        # Region E: leave (3,1) and (5,1), with (4,1) marked between them.
+        for cell in [(3, 2), (4, 1), (4, 2), (4, 3), (5, 2), (5, 3)]:
+            g.toggle_mark(*cell)
+        self.assertTrue(g.assist(3, 1))
+        new = marked(g)
+        for r in (0, 1, 2):
+            self.assertIn((r, 1), new)  # rest of column 2
+        # C·C with a marked cell between: the cells beside the middle are out too.
+        self.assertIn((4, 0), new)
+        self.assertNotIn((3, 0), new)  # touches (3,1) only
+
+
+    def test_drag_one_undo_step(self):
+        g = new_game()
+        g.begin()
+        target = g.drag_target(0, 0)
+        for c in range(4):
+            g.drag_paint(0, c, target)
+        g.end()
+        self.assertEqual(marked(g), {(0, 0), (0, 1), (0, 2), (0, 3)})
+        g.undo()
+        self.assertEqual(marked(g), set())
+
+    def test_drag_erases_from_marked_start(self):
+        g = new_game()
+        g.toggle_mark(0, 0)
+        g.toggle_mark(0, 2)
+        g.begin()
+        target = g.drag_target(0, 0)
+        for c in range(3):
+            g.drag_paint(0, c, target)
+        g.end()
+        self.assertEqual(marked(g), set())
+
+    def test_clear_guesses(self):
+        g = new_game()
+        g.toggle_mark(0, 0)
+        g.guess_mode = True
+        g.toggle_mark(1, 1)
+        g.toggle_mark(2, 2)
+        g.clear_guesses()
+        self.assertEqual(marked(g), {(0, 0)})
+        g.undo()
+        self.assertEqual(marked(g), {(0, 0), (1, 1), (2, 2)})
+
+
 class StoreTest(unittest.TestCase):
     def test_local_bundle(self):
         with tempfile.TemporaryDirectory() as d:
