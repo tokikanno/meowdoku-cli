@@ -5,8 +5,8 @@ import os
 import random
 
 from .game_view import GameView
-from .generator import format_level, generate
-from .levels import LevelError, parse_level
+from .generator import format_level, generate_from_seed, new_seed, seed_code
+from .levels import Favorites, LevelError, parse_level
 from .menu import LevelMenu, MainMenu, pack_label
 from .model import Game
 from .term import Colors, Screen
@@ -22,6 +22,7 @@ class App:
         self.scr = scr
         self.store = store
         self.progress = progress
+        self.favorites = store.favorites if store else Favorites()
         self.ascii = ascii
         self.colors = Colors()
         self.settings = {'auto_mark': True, 'show_coords': False}
@@ -105,31 +106,58 @@ class App:
         except LevelError as e:
             self.error(str(e))
             return 'menu'
+        notes = [] if pack == 'fav' else [f'source: {pack_label(pack)} #{idx}']
         return self.run_level(puzzle, pack, idx, title, has_next,
                               on_win=lambda stars, secs: self.progress.record(pack, idx, stars, secs),
-                              best_time=self.progress.best_time(pack, idx))
+                              best_time=self.progress.best_time(pack, idx),
+                              on_favorite=self.favorite(puzzle, notes))
 
-    def play_generated(self, n):
-        """Freshly generated n×n levels; an unfinished one is resumed first."""
+    def play_generated(self, n, seed=None):
+        """Freshly generated n×n levels; an unfinished one is resumed first, unless
+        `seed` asks for a particular board."""
         saved = self.progress.get_save('gen', n)
-        puzzle = None
-        if saved:
+        puzzle = code = None
+        if saved and (seed is None or saved.get('seed') == seed_code(n, seed)):
             try:
                 puzzle = parse_level(saved['level'])
+                code = saved.get('seed')
             except (LevelError, KeyError, TypeError):
                 self.progress.drop_save('gen', n)
+        elif saved:
+            self.progress.drop_save('gen', n)
         while True:
             if puzzle is None:
-                self.blank.busy(f'產生 {n}×{n} 關卡中…')
-                puzzle = generate(n)
-            result = self.run_level(puzzle, 'gen', n, f'隨機出題 {n}×{n}', has_next=True,
-                                    extra={'level': format_level(puzzle)})
+                seed = new_seed() if seed is None else seed
+                code = seed_code(n, seed)
+                self.blank.busy(f'產生 {n}×{n} 關卡中…（{code}）')
+                puzzle = generate_from_seed(n, seed)
+                seed = None  # the next level gets a fresh seed
+            title = f'隨機出題 {code}' if code else f'隨機出題 {n}×{n}'
+            notes = [f'seed: {code}'] if code else []
+            result = self.run_level(puzzle, 'gen', n, title, has_next=True,
+                                    extra={'level': format_level(puzzle), 'seed': code},
+                                    on_favorite=self.favorite(puzzle, notes))
             if result == 'next':
                 puzzle = None
             elif result != 'restart':
                 return result
 
-    def run_level(self, puzzle, pack, idx, title, has_next, on_win=None, best_time=None, extra=None):
+    def favorite(self, puzzle, notes=()):
+        """The `f` key's action for `puzzle`: save it to the favorites, once."""
+        def add():
+            favorites = self.favorites
+            found = favorites.find(puzzle)
+            if found:
+                return f'已經在收藏裡了（第 {found} 關）'
+            try:
+                idx, path = favorites.add(format_level(puzzle, notes))
+            except OSError as e:
+                return f'收藏失敗：{e}'
+            return f'已收藏為第 {idx} 關（{path.parent.name}/{path.name}）'
+        return add
+
+    def run_level(self, puzzle, pack, idx, title, has_next, on_win=None, best_time=None, extra=None,
+                  on_favorite=None):
         """Play one puzzle, resuming and saving it under (pack, idx)."""
         self.progress.set_last(pack, idx)
         saved = self.progress.get_save(pack, idx)
@@ -137,7 +165,7 @@ class App:
         elapsed = float(saved.get('elapsed', 0)) if game else 0.0
         view = GameView(self.scr, self.colors, game or Game(puzzle), title, self.settings,
                         on_win=on_win, has_next=has_next, ascii=self.ascii, elapsed=elapsed,
-                        best_time=best_time, resumed=game is not None)
+                        best_time=best_time, resumed=game is not None, on_favorite=on_favorite)
         result = view.run()
         # Keep an unfinished level for next time; a restart or an ending clears it.
         if view.game.over or result == 'restart' or not view.game.undo_stack:
@@ -148,9 +176,11 @@ class App:
         return result
 
     def play_file(self, puzzle, title):
+        on_favorite = self.favorite(puzzle, [f'source: {title}'])
         while True:
             view = GameView(self.scr, self.colors, Game(puzzle), title, self.settings,
-                            has_menu=False, has_next=False, ascii=self.ascii)
+                            has_menu=False, has_next=False, ascii=self.ascii,
+                            on_favorite=on_favorite)
             if view.run() != 'restart':
                 return
 
@@ -163,7 +193,7 @@ class App:
 
 
 def run(start, store=None, progress=None, ascii=False):
-    """start: ('menu',), ('pack', pack), ('play', pack, idx), ('generate', n)
+    """start: ('menu',), ('pack', pack), ('play', pack, idx), ('generate', n, seed)
     or ('file', puzzle, title)."""
     os.environ.setdefault('ESCDELAY', '25')
 
@@ -186,7 +216,7 @@ def run(start, store=None, progress=None, ascii=False):
         elif kind == 'generate':
             initial = 'generate'
             app.gen_size = start[1]
-            if app.play_generated(start[1]) == 'quit':
+            if app.play_generated(*start[1:]) == 'quit':
                 return
         else:
             initial = progress.last.get('pack')

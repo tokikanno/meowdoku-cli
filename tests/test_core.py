@@ -8,8 +8,9 @@ import itertools
 import random
 
 from meowdoku.game_view import BOX, line_code
-from meowdoku.generator import format_level, generate, logic_solvable
-from meowdoku.levels import LevelError, LevelStore, Progress, parse_level
+from meowdoku.generator import (format_level, generate, generate_from_seed, logic_solvable,
+                                parse_seed_code, seed_code)
+from meowdoku.levels import Favorites, LevelError, LevelStore, Progress, parse_level
 from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game
 from meowdoku.solver import solutions
 from meowdoku.term import (REGION_COLORS, REGION_COLORS_DIM, PairPool, assign_slots,
@@ -240,6 +241,15 @@ class BatchTest(unittest.TestCase):
         self.assertFalse(g.assist(0, 5))  # region B has none left
         self.assertEqual(len(g.undo_stack), 2)
 
+    def test_last_open_cell(self):
+        g = new_game()
+        reg = g.region(0, 5)  # region B: (0,5), (1,5)
+        self.assertIsNone(g.last_open_cell(reg))
+        g.toggle_mark(0, 5)
+        self.assertEqual(g.last_open_cell(reg), (1, 5))
+        g.reveal(1, 5)
+        self.assertIsNone(g.last_open_cell(reg))  # has its cat
+
     def test_assist_needs_one_line(self):
         g = new_game()
         # Region F: mark (4,5) → (3,5), (5,4), (5,5) not in one line.
@@ -311,6 +321,47 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(solutions(p.regions), [p.solution])
             self.assertTrue(logic_solvable(p.regions))
             self.assertEqual(parse_level(format_level(p)), p)
+
+
+class SeedTest(unittest.TestCase):
+    def test_same_seed_same_board(self):
+        self.assertEqual(generate_from_seed(7, 12345), generate_from_seed(7, 12345))
+
+    def test_code_round_trip(self):
+        self.assertEqual(seed_code(12, 0x5f3a9c21), '12-5f3a9c21')
+        self.assertEqual(parse_seed_code('12-5F3A9C21'), (12, 0x5f3a9c21))
+
+    def test_bad_codes(self):
+        for code in ('5-1', '13-1', '12', '12-xyz', '12-123456789', 'a-1'):
+            with self.assertRaises(ValueError, msg=code):
+                parse_seed_code(code)
+
+
+class FavoritesTest(unittest.TestCase):
+    def test_add_find_load(self):
+        with tempfile.TemporaryDirectory() as d:
+            fav = Favorites(Path(d) / 'favorites')
+            self.assertEqual(fav.count(), 0)
+            puzzle = parse_level(LEVEL)
+            self.assertIsNone(fav.find(puzzle))
+            idx, path = fav.add(format_level(puzzle, ['seed: 6-0000002a']))
+            self.assertEqual((idx, path.name), (1, '0001.txt'))
+            self.assertIn('# seed: 6-0000002a', path.read_text())
+            self.assertEqual(fav.find(puzzle), 1)
+            self.assertEqual(fav.load(1), puzzle)
+            other = generate(7, random.Random(1))
+            self.assertEqual(fav.add(format_level(other))[0], 2)
+            self.assertEqual(fav.count(), 2)
+            with self.assertRaises(LevelError):
+                fav.load(3)
+
+    def test_numbers_continue_after_a_gap(self):
+        with tempfile.TemporaryDirectory() as d:
+            fav = Favorites(d)
+            fav.add(LEVEL)
+            fav.add(LEVEL)
+            (Path(d) / '0001.txt').unlink()
+            self.assertEqual(fav.add(LEVEL)[1].name, '0003.txt')
 
 
 class StoreTest(unittest.TestCase):

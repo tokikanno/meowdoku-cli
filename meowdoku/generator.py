@@ -217,7 +217,40 @@ def generate(n, rng=None, require_logic=True, max_attempts=1000):
     raise RuntimeError(f'無法產生 {n}×{n} 的關卡')
 
 
-def format_level(puzzle):
-    """The `level_*.txt` format, readable by levels.parse_level."""
+def format_level(puzzle, notes=()):
+    """The `level_*.txt` format, readable by levels.parse_level; `notes` become
+    extra `# ` comment lines."""
     rows = [''.join(chr(ord('A') + k) for k in row) for row in puzzle.regions]
-    return '\n'.join([str(puzzle.n), *rows, '# solution: ' + ' '.join(map(str, puzzle.solution))]) + '\n'
+    lines = [str(puzzle.n), *rows, '# solution: ' + ' '.join(map(str, puzzle.solution))]
+    return '\n'.join(lines + [f'# {note}' for note in notes]) + '\n'
+
+
+# ── seeds ────────────────────────────────────────────────────────────────────
+# A level code like `12-5f3a9c21` (size, then a 32-bit seed in hex) regenerates the
+# same board, as long as the generator above stays the same: any change to it may
+# turn old codes into different boards. Favorites keep the full board for that reason.
+
+def new_seed():
+    return random.getrandbits(32)
+
+
+def seed_code(n, seed):
+    return f'{n}-{seed:08x}'
+
+
+def parse_seed_code(code):
+    """(n, seed) from a level code; ValueError if it isn't one."""
+    size, sep, seed = code.strip().lower().partition('-')
+    if not sep or not size.isdigit() or not 6 <= int(size) <= 12:
+        raise ValueError(f'關卡代碼要像 12-5f3a9c21（大小 6～12、連字號、十六進位），不是「{code}」')
+    try:
+        value = int(seed, 16)
+    except ValueError:
+        raise ValueError(f'關卡代碼要像 12-5f3a9c21（大小 6～12、連字號、十六進位），不是「{code}」')
+    if not 0 <= value < 1 << 32:
+        raise ValueError(f'關卡代碼的 seed 最多 8 位十六進位：「{code}」')
+    return int(size), value
+
+
+def generate_from_seed(n, seed):
+    return generate(n, random.Random(seed))

@@ -11,6 +11,7 @@ from .solver import solutions
 
 BUNDLE_URL = 'https://raw.githubusercontent.com/plko/meowdoku/main/levels/bundle/'
 PACK_ORDER = ['6', '7', '8', '9', '10', '11', '12', 'hard', 'bad']
+FAV = 'fav'  # the favorites, played like a pack
 
 
 class LevelError(Exception):
@@ -60,9 +61,11 @@ def _download(url):
 
 
 class LevelStore:
-    """Packs from a bundle directory: a local one, or the download cache."""
+    """Packs from a bundle directory: a local one, or the download cache; plus the
+    favorites as pack `fav`."""
 
-    def __init__(self, levels_dir=None, update=False):
+    def __init__(self, levels_dir=None, update=False, favorites=None):
+        self.favorites = favorites or Favorites()
         self.local = levels_dir is not None
         self.dir = Path(levels_dir) if self.local else cache_dir()
         if self.local:
@@ -100,7 +103,12 @@ class LevelStore:
         known = [p for p in PACK_ORDER if p in self.manifest]
         return known + sorted(set(self.manifest) - set(known))
 
+    def has(self, pack):
+        return pack in self.manifest or pack == FAV
+
     def count(self, pack):
+        if pack == FAV:
+            return self.favorites.count()
         return self.manifest[pack]['count']
 
     def _pack_levels(self, pack):
@@ -123,6 +131,8 @@ class LevelStore:
 
     def load(self, pack, idx):
         """Level `idx` (1-based) of `pack`."""
+        if pack == FAV:
+            return self.favorites.load(idx)
         levels = self._pack_levels(pack)
         if not 1 <= idx <= len(levels):
             raise LevelError(f'pack {pack} 只有第 1～{len(levels)} 關')
@@ -132,6 +142,52 @@ class LevelStore:
 def data_dir():
     base = os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share'
     return Path(base) / 'meowdoku'
+
+
+class Favorites:
+    """Saved levels, one `level_*.txt`-format file each in `favorites/`, numbered in
+    the order they were added (0001.txt, 0002.txt, …). Level k is the k-th file, so
+    deleting a file by hand renumbers the ones after it."""
+
+    def __init__(self, path=None):
+        self.dir = Path(path) if path else data_dir() / 'favorites'
+
+    def files(self):
+        try:
+            return sorted(p for p in self.dir.glob('*.txt') if p.is_file())
+        except OSError:
+            return []
+
+    def count(self):
+        return len(self.files())
+
+    def load(self, idx):
+        files = self.files()
+        if not 1 <= idx <= len(files):
+            raise LevelError(f'收藏只有第 1～{len(files)} 關')
+        try:
+            return parse_level(files[idx - 1].read_text(encoding='utf-8'))
+        except OSError as e:
+            raise LevelError(f'無法讀取 {files[idx - 1]}：{e}')
+
+    def find(self, puzzle):
+        """Number of the favorite with this board, or None."""
+        for idx, path in enumerate(self.files(), 1):
+            try:
+                if parse_level(path.read_text(encoding='utf-8')).regions == puzzle.regions:
+                    return idx
+            except (OSError, LevelError):
+                continue
+        return None
+
+    def add(self, text):
+        """Save a level (its `level_*.txt` text); returns (number, path)."""
+        files = self.files()
+        last = max((int(p.stem) for p in files if p.stem.isdigit()), default=0)
+        path = self.dir / f'{last + 1:04d}.txt'
+        self.dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+        return len(files) + 1, path
 
 
 class Progress:

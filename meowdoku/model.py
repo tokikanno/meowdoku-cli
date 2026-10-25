@@ -130,21 +130,21 @@ class Game:
         self.end()
         return result
 
-    def forced_cell(self):
-        """The cell of a region (with no cat yet) that has exactly one unmarked cell
-        left, first in reading order. Only regions count: a row or column down to one
-        cell is a deduction for the player to make, not a shortcut to take for them.
+    def last_open_cell(self, reg):
+        """The region's only unmarked cell, if it has no cat and exactly one left.
         Guesses count as unmarked: they're tentative, and revealing on a guess could
         cost a heart."""
-        forced = []
-        for reg in range(self.n):
-            cells = self.region_cells(reg)
-            states = [self.board[r][c] for r, c in cells]
-            if CAT in states:
-                continue
-            open_cells = [cell for cell, st in zip(cells, states) if st in (EMPTY, GUESS)]
-            if len(open_cells) == 1:
-                forced.append(open_cells[0])
+        cells = self.region_cells(reg)
+        if any(self.board[r][c] == CAT for r, c in cells):
+            return None
+        open_cells = [(r, c) for r, c in cells if self.board[r][c] in (EMPTY, GUESS)]
+        return open_cells[0] if len(open_cells) == 1 else None
+
+    def forced_cell(self):
+        """The `last_open_cell` of some region, first in reading order. Only regions
+        count: a row or column down to one cell is a deduction for the player to make,
+        not a shortcut to take for them."""
+        forced = [cell for reg in range(self.n) if (cell := self.last_open_cell(reg))]
         return min(forced) if forced else None
 
     def _auto_mark(self, r, c):

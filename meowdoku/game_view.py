@@ -40,13 +40,14 @@ HELP = [
     ('v', '連續標記模式：移動時一路標記，再按 v 或 Esc 結束'),
     ('H / L', '同色格子中，目前格子左／右側的全部標記'),
     ('K / J', '同色格子中，目前格子上／下方的全部標記'),
-    ('s', '同色剩下的格子都在同一行／列時，標記推得出的格子'),
+    ('s', '同色剩下的格子都在同一行／列時，標記推得出的格子；只剩一格時直接翻開'),
     ('Ctrl-G', '清除所有猜測 {G}'),
     (':', '跳到指定格子：字母 + 數字，例如 c5'),
     ('a', '切換翻開後自動標記'),
     ('t', '切換座標提示'),
     ('b', '切換盤面畫法：框線版 → 全格線版 → 色塊版'),
     ('u / Ctrl-R', 'undo / redo'),
+    ('f', '收藏這一關（主選單的「收藏」可以再玩）'),
     ('r', '重新開始這一關'),
     ('n', '下一關（結束後；過關後也可以按 Enter）'),
     ('Esc / m', '回到選單'),
@@ -93,13 +94,15 @@ class GameView(Screen):
     """Plays one level. run() returns 'quit', 'menu', 'next' or 'restart'."""
 
     def __init__(self, scr, colors, game, title, settings, on_win=None, has_menu=True,
-                 has_next=True, ascii=False, elapsed=0.0, best_time=None, resumed=False):
+                 has_next=True, ascii=False, elapsed=0.0, best_time=None, resumed=False,
+                 on_favorite=None):
         super().__init__(scr, colors)
         self.game = game
         self.title = title
         self.settings = settings  # shared across levels: auto_mark, show_coords
         game.auto_mark = settings.get('auto_mark', True)
         self.on_win = on_win
+        self.on_favorite = on_favorite  # () -> message; None when there's nowhere to save
         self.has_menu = has_menu
         self.has_next = has_next
         self.symbols = SYMBOLS_ASCII if ascii else SYMBOLS
@@ -324,7 +327,8 @@ class GameView(Screen):
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
         self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  HJKL 同色批次  s 輔助  : 跳轉',
                  curses.A_DIM)
-        self.put(y + 3, x, f'r 重來  b 畫法  {"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
+        self.put(y + 3, x, f'r 重來  b 畫法  {"f 收藏  " if self.on_favorite else ""}'
+                           f'{"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
                  curses.A_DIM)
 
     def drag_label(self):
@@ -336,7 +340,7 @@ class GameView(Screen):
     def over_keys(self):
         nxt = 'Enter/n 下一關' if self.game.won else 'n 下一關'
         keys = [nxt] if self.has_next else []
-        keys += ['r 重玩'] + (['m 選單'] if self.has_menu else []) + ['q 離開']
+        keys += ['r 重玩'] + (['f 收藏'] if self.on_favorite else []) + (['m 選單'] if self.has_menu else []) + ['q 離開']
         return ' · '.join(keys)
 
     def over_lines(self):
@@ -383,7 +387,7 @@ class GameView(Screen):
             self.result = 'quit'
         elif modal in ('menu', 'restart') and yes:
             self.result = modal
-        elif modal == 'over' and (key in ('n', 'r', 'm', 'q') or key in ENTER):
+        elif modal == 'over' and (key in ('n', 'r', 'm', 'q', 'f') or key in ENTER):
             self.handle_key(key)
 
     def handle_key(self, key):
@@ -435,8 +439,16 @@ class GameView(Screen):
         elif key in BATCH_SIDES:
             g.mark_side(r, c, *BATCH_SIDES[key])
         elif key == 's':
-            if not g.over and not g.assist(r, c):
+            if g.over:
+                pass
+            elif cell := g.last_open_cell(g.region(r, c)):
+                # The color's last unmarked cell: reveal it, as Enter on a cat does.
+                self.cur = cell
+                self.reveal(*cell)
+            elif not g.assist(r, c):
                 self.show_toast('s 不適用：這個顏色剩下的格子不在同一行或同一列')
+        elif key == 'f' and self.on_favorite:
+            self.show_toast(self.on_favorite(), seconds=2.5)  # long enough to read the path
         elif key == CTRL_G:
             g.clear_guesses()
         elif key == ':':

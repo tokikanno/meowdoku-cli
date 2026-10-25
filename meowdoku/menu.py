@@ -4,7 +4,8 @@ import curses
 
 from .term import CTRL_X, ENTER, ESC, MOVES, Screen, text_width
 
-PACK_LABELS = {'hard': '困難', 'bad': '需猜測'}
+PACK_LABELS = {'hard': '困難', 'bad': '需猜測', 'fav': '收藏'}
+FAV = 'fav'
 GENERATE = 'generate'
 GEN_SIZES = list(range(6, 13))
 CONTINUE = 'continue'
@@ -30,10 +31,10 @@ class MainMenu(Screen):
         self.gen_size = gen_size
         last = progress.last
         self.resume = None  # (pack, idx) of the last level, if it was left unfinished
-        if ((last.get('pack') in store.manifest or last.get('pack') == 'gen')
+        if ((store.has(last.get('pack')) or last.get('pack') == 'gen')
                 and progress.get_save(last['pack'], last.get('level'))):
             self.resume = (last['pack'], last['level'])
-        self.items = ([CONTINUE] if self.resume else []) + store.packs + [GENERATE, QUIT]
+        self.items = ([CONTINUE] if self.resume else []) + store.packs + [FAV, GENERATE, QUIT]
         self.sel = 0 if self.resume else self.items.index(initial) if initial in self.items else 0
 
     def draw(self):
@@ -45,7 +46,7 @@ class MainMenu(Screen):
                 rows.append(f'繼續：{resume_label(*self.resume)}')
             elif item == GENERATE:
                 rows.append(f'隨機出題：‹ {self.gen_size}×{self.gen_size} ›')
-            elif item in self.store.manifest:
+            elif self.store.has(item):
                 count = self.store.count(item)
                 done = self.progress.cleared(item)
                 label = pack_label(item)
@@ -89,8 +90,11 @@ class MainMenu(Screen):
                     return ('continue', self.resume)
                 if item == GENERATE:
                     return ('generate', self.gen_size)
+                if not self.store.count(item):
+                    self.show_toast('還沒有收藏：遊戲中按 f 收藏目前的關卡', seconds=2.0)
+                    continue
                 return ('pack', item)
-            elif key == 'r' and item in self.store.manifest:
+            elif key == 'r' and self.store.has(item) and self.store.count(item):
                 return ('random', item)
 
 

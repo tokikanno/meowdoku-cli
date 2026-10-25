@@ -17,10 +17,12 @@ meowdoku               # 主選單
 meowdoku 10            # pack 10 的選關畫面
 meowdoku 10 42         # 直接玩 pack 10 第 42 關
 meowdoku --random 10    # 現場產生一題 10×10
+meowdoku --seed 12-5f3a9c21   # 用關卡代碼重現隨機出的關卡
+meowdoku fav            # 收藏的關卡
 meowdoku --file level.txt
 ```
 
-第一次執行時會從原 repo 下載關卡，快取在 `~/.cache/meowdoku/`；通關紀錄、最佳時間和未完成關卡的存檔都在 `~/.local/share/meowdoku/progress.json`。
+第一次執行時會從原 repo 下載關卡，快取在 `~/.cache/meowdoku/`；通關紀錄、最佳時間和未完成關卡的存檔都在 `~/.local/share/meowdoku/progress.json`。遊戲中按 `f` 收藏的關卡存在 `~/.local/share/meowdoku/favorites/`，一關一個檔，格式和 `--file` 相同。
 
 | 參數 | 說明 |
 |---|---|

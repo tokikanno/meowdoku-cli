@@ -278,8 +278,8 @@ class Screen:
             self.put(y + 1 + i, x, '│' + ' ' * left + s + ' ' * (pad - left) + '│', attr)
         self.put(y + bh - 1, x, '└' + '─' * (bw - 2) + '┘', attr)
 
-    def show_toast(self, text):
-        self.toast = (text, time.monotonic() + TOAST_SECONDS)
+    def show_toast(self, text, seconds=TOAST_SECONDS):
+        self.toast = (text, time.monotonic() + seconds)
 
     def busy(self, text):
         """Draw a box right away, for work that blocks (e.g. a download)."""
