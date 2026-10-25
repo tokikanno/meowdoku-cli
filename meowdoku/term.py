@@ -1,6 +1,7 @@
 """Shared curses helpers: text width, colors, box drawing, toasts, key reading."""
 
 import curses
+import os
 import time
 import unicodedata
 
@@ -16,6 +17,13 @@ REGION_COLORS_DIM = [
 ]
 
 TOAST_SECONDS = 1.0
+KEYLOG = os.environ.get('MEOWDOKU_KEYLOG')  # debugging: append every key read to this file
+
+
+def log_key(*parts):
+    if KEYLOG:
+        with open(KEYLOG, 'a', encoding='utf-8') as f:
+            f.write(f'{time.monotonic():.3f} ' + ' '.join(parts) + '\n')
 CTRL_G, CTRL_R, CTRL_X, ESC = '\x07', '\x12', '\x18', '\x1b'
 ENTER = ('\n', '\r', curses.KEY_ENTER)
 SHIFT_MOVES = {
@@ -45,6 +53,11 @@ def clip(s, width):
         out.append(ch)
         w += cw
     return ''.join(out)
+
+
+def fmt_time(seconds):
+    s = int(seconds)
+    return f'{s // 3600}:{s // 60 % 60:02}:{s % 60:02}' if s >= 3600 else f'{s // 60:02}:{s % 60:02}'
 
 
 def hex_to_rgb(h):
@@ -86,9 +99,65 @@ def xterm256(rgb):
     return min(_XTERM_LAB, key=lambda i: sum((a - b) ** 2 for a, b in zip(target, _XTERM_LAB[i])))
 
 
+def assign_slots(rgbs, reserved=()):
+    """A distinct xterm-256 slot per color, each the nearest one still free, so two
+    similar colors never collapse into one. Colors are placed hardest-first: the one
+    whose nearest slot is farthest away picks before the easy ones take its options."""
+    labs = [_lab(rgb) for rgb in rgbs]
+
+    def dist(lab, i):
+        return sum((a - b) ** 2 for a, b in zip(lab, _XTERM_LAB[i]))
+
+    free = set(_XTERM_LAB) - set(reserved)
+    order = sorted(range(len(rgbs)), key=lambda k: -min(dist(labs[k], i) for i in free))
+    slots = [None] * len(rgbs)
+    for k in order:
+        slots[k] = min(free, key=lambda i: dist(labs[k], i))
+        free.discard(slots[k])
+    return slots
+
+
 def is_light(rgb):
     r, g, b = rgb
     return 0.299 * r + 0.587 * g + 0.114 * b > 140
+
+
+# Python's curses packs the pair number into 8 attribute bits: pair 256 and up
+# silently wraps onto other pairs (wrong colors, flicker). Stay below it.
+MAX_PAIRS = 256
+
+
+class PairPool:
+    """Pair numbers [first, limit) handed out per (fg, bg). When they run out, a
+    number not used in the current frame is reused: one frame never needs more
+    pairs than it has, but a whole game's worth of combinations would."""
+
+    def __init__(self, first, limit, init_pair):
+        self.free = list(range(first, limit))
+        self.init_pair = init_pair
+        self.by_colors = {}  # (fg, bg) -> pair number
+        self.last_used = {}  # pair number -> frame
+        self.frame = 0
+
+    def new_frame(self):
+        self.frame += 1
+
+    def get(self, fg, bg):
+        """A pair number for these colors, or 0 if this frame has used them all."""
+        pid = self.by_colors.get((fg, bg))
+        if pid is None:
+            if self.free:
+                pid = self.free.pop(0)
+            else:
+                pid = min(self.last_used, key=self.last_used.get, default=None)
+                if pid is None or self.last_used[pid] == self.frame:
+                    return 0
+                stale = next(k for k, v in self.by_colors.items() if v == pid)
+                del self.by_colors[stale]
+            self.init_pair(pid, fg, bg)
+            self.by_colors[fg, bg] = pid
+        self.last_used[pid] = self.frame
+        return pid
 
 
 class Colors:
@@ -100,6 +169,10 @@ class Colors:
         self.dim_regions = []
         self.cursor = curses.A_REVERSE
         self.stars = {1: 0, 2: 0, 3: 0}
+        self.slots = {}  # (region, dim) -> color number, for pairs built on demand
+        self.default_bg = -1
+        self.cursor_fg = None
+        self.pool = None  # PairPool for pairs built on demand, once colors are set up
         if not curses.has_colors():
             self.regions = [0] * len(REGION_COLORS)
             self.dim_regions = [curses.A_DIM] * len(REGION_COLORS)
@@ -110,17 +183,28 @@ class Colors:
             default_bg = -1
         except curses.error:
             default_bg = curses.COLOR_BLACK
+        self.default_bg = default_bg
         pid = 1
         if curses.COLORS >= 256 and curses.COLOR_PAIRS >= 2 * len(REGION_COLORS) + 8:
             self.rich = True
-            for palette, attrs in ((REGION_COLORS, self.regions),
-                                   (REGION_COLORS_DIM, self.dim_regions)):
-                for hx in palette:
-                    rgb = hex_to_rgb(hx)
-                    curses.init_pair(pid, 16 if is_light(rgb) else 231, xterm256(rgb))
-                    attrs.append(curses.color_pair(pid))
-                    pid += 1
             extra = {'cursor': 226, 1: 203, 2: 221, 3: 114}
+            rgbs = [hex_to_rgb(hx) for hx in REGION_COLORS + REGION_COLORS_DIM]
+            slots = assign_slots(rgbs, reserved=[16, 231, *extra.values()])
+            # Where the terminal lets us, repaint those slots with the exact colors;
+            # ncurses restores the palette on exit. Elsewhere the nearest slots stand.
+            exact = curses.can_change_color() and os.environ.get('MEOWDOKU_PALETTE') != '0'
+            for i, (rgb, slot) in enumerate(zip(rgbs, slots)):
+                if exact:
+                    try:
+                        # ncurses scales 0..1000 and truncates on the way back; round up to land exact.
+                        curses.init_color(slot, *(-(-v * 1000 // 255) for v in rgb))
+                    except curses.error:
+                        exact = False
+                curses.init_pair(pid, 16 if is_light(rgb) else 231, slot)
+                self.slots[i % len(REGION_COLORS), i >= len(REGION_COLORS)] = slot
+                attrs = self.regions if i < len(REGION_COLORS) else self.dim_regions
+                attrs.append(curses.color_pair(pid))
+                pid += 1
         else:
             # 8/16 colors can't tell 12 regions apart, so cells also show their letter.
             basic = [curses.COLOR_RED, curses.COLOR_GREEN, curses.COLOR_YELLOW,
@@ -137,9 +221,26 @@ class Colors:
             attr = curses.color_pair(pid) | curses.A_BOLD
             if name == 'cursor':
                 self.cursor = attr
+                self.cursor_fg = fg
             else:
                 self.stars[name] = attr
             pid += 1
+
+        self.pool = PairPool(pid, min(curses.COLOR_PAIRS, MAX_PAIRS), curses.init_pair)
+
+    def slot(self, reg, dim=False):
+        return self.slots[reg % len(REGION_COLORS), dim]
+
+    def new_frame(self):
+        if self.pool:
+            self.pool.new_frame()
+
+    def pair(self, fg, bg):
+        """Attribute for any fg/bg color pair, set up the first time it's asked for."""
+        if not self.pool:
+            return 0
+        pid = self.pool.get(fg, bg)
+        return curses.color_pair(pid) if pid else 0
 
     def region(self, reg, dim=False):
         attrs = self.dim_regions if dim else self.regions
@@ -153,6 +254,7 @@ class Screen:
         self.scr = scr
         self.colors = colors
         self.toast = None  # (text, expires_at)
+        self.tick = None  # seconds between redraws while idle (e.g. a running clock)
 
     def put(self, y, x, s, attr=0):
         h, w = self.scr.getmaxyx()
@@ -193,12 +295,17 @@ class Screen:
                 self.toast = None
                 return None
             self.scr.timeout(max(1, int(left * 1000)))
+        elif self.tick:
+            self.scr.timeout(int(self.tick * 1000))
         else:
             self.scr.timeout(-1)
         try:
             key = self.scr.get_wch()
         except curses.error:
             return None
+        if KEYLOG:
+            name = curses.keyname(key).decode() if isinstance(key, int) else ''
+            log_key('key', repr(key), name)
         if key == curses.KEY_RESIZE:
             curses.update_lines_cols()
             return None
@@ -226,6 +333,7 @@ class Screen:
                     break
         except curses.error:
             pass  # nothing more queued
+        log_key('  after ESC:', repr(seq))
         if not seq:
             return ESC
         return SHIFT_ARROW_SEQS.get(seq)

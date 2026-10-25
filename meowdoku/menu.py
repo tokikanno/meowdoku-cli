@@ -6,6 +6,7 @@ from .term import CTRL_X, ENTER, ESC, MOVES, Screen, text_width
 
 PACK_LABELS = {'hard': '困難', 'bad': '需猜測'}
 RANDOM_ANY = '隨機（6～12 任意大小）'
+CONTINUE = 'continue'
 QUIT = '離開'
 
 
@@ -20,15 +21,21 @@ class MainMenu(Screen):
         super().__init__(scr, colors)
         self.store = store
         self.progress = progress
-        self.items = store.packs + [RANDOM_ANY, QUIT]
-        self.sel = self.items.index(initial) if initial in self.items else 0
+        last = progress.last
+        self.resume = None  # (pack, idx) of the last level, if it was left unfinished
+        if last.get('pack') in store.manifest and progress.get_save(last['pack'], last.get('level')):
+            self.resume = (last['pack'], last['level'])
+        self.items = ([CONTINUE] if self.resume else []) + store.packs + [RANDOM_ANY, QUIT]
+        self.sel = 0 if self.resume else self.items.index(initial) if initial in self.items else 0
 
     def draw(self):
         self.scr.erase()
         h, w = self.scr.getmaxyx()
         rows = []
         for item in self.items:
-            if item in self.store.manifest:
+            if item == CONTINUE:
+                rows.append(f'繼續：{pack_label(self.resume[0])} #{self.resume[1]}')
+            elif item in self.store.manifest:
                 count = self.store.count(item)
                 done = self.progress.cleared(item)
                 label = pack_label(item)
@@ -41,10 +48,12 @@ class MainMenu(Screen):
         self.put(y, x, 'MEOWDOKU', curses.A_BOLD)
         self.put(y + 1, x, '已通關 / 關卡數', curses.A_DIM)
         for i, row in enumerate(rows):
-            gap = 1 if i >= len(self.store.packs) else 0  # blank line before the extra items
+            # Blank lines set the continue item and the trailing items apart from the packs.
+            first_pack = 1 if self.resume else 0
+            gap = (1 if self.resume and i >= 1 else 0) + (1 if i >= first_pack + len(self.store.packs) else 0)
             attr = curses.A_REVERSE if i == self.sel else 0
             self.put(y + 3 + i + gap, x, f'  {row}{" " * (width - 2 - text_width(row))}', attr)
-        self.put(y + len(rows) + 5, x, '↑↓ 選擇 · Enter 確定 · r 這個包隨機一關 · q 離開', curses.A_DIM)
+        self.put(y + len(rows) + 5 + (1 if self.resume else 0), x, '↑↓ 選擇 · Enter 確定 · r 這個包隨機一關 · q 離開', curses.A_DIM)
         if self.toast:
             self.draw_box([self.toast[0]])
 
@@ -63,6 +72,8 @@ class MainMenu(Screen):
             elif key in ENTER:
                 if item == QUIT:
                     return 'quit'
+                if item == CONTINUE:
+                    return ('continue', self.resume)
                 if item == RANDOM_ANY:
                     return ('random', None)
                 return ('pack', item)
@@ -114,14 +125,15 @@ class LevelMenu(Screen):
                 attr = self.colors.stars[stars] if stars else 0
                 if idx == self.sel:
                     attr = curses.A_REVERSE | (attr & ~curses.A_COLOR)
-                mark = '★' * stars + ' ' * (3 - stars) if stars else '   '
                 self.put(2 + gr, x0 + gc * self.ENTRY_W, f'{idx:>4}', attr)
                 if stars:
-                    self.put(2 + gr, x0 + gc * self.ENTRY_W + 4, mark, self.colors.stars[stars])
+                    self.put(2 + gr, x0 + gc * self.ENTRY_W + 4, '★' * stars, self.colors.stars[stars])
+                elif self.progress.get_save(self.pack, idx):
+                    self.put(2 + gr, x0 + gc * self.ENTRY_W + 4, '…', curses.A_DIM)
         if self.typed:
             hint = f'跳到第 {self.typed} 關（Enter 確定 · Esc 取消）'
         else:
-            hint = '方向鍵 選擇 · 數字 跳關 · Enter 開始 · r 隨機未通關 · Esc 返回'
+            hint = '方向鍵 選擇 · 數字 跳關 · Enter 開始 · r 隨機未通關 · Esc 返回 · … 未完成'
         self.put(h - 2, x0, hint, curses.A_DIM)
         if self.toast:
             self.draw_box([self.toast[0]])

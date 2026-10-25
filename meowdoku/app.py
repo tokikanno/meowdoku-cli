@@ -36,6 +36,12 @@ class App:
             if choice == 'quit':
                 return
             kind, pack = choice
+            if kind == 'continue':
+                pack, idx = pack
+                initial = pack
+                if self.play_pack(pack, idx) == 'quit':
+                    return
+                continue
             initial = pack or initial
             if kind == 'random':
                 result = self.play_random(pack)
@@ -94,10 +100,20 @@ class App:
             self.error(str(e))
             return 'menu'
         self.progress.set_last(pack, idx)
-        view = GameView(self.scr, self.colors, Game(puzzle), title, self.settings,
-                        on_win=lambda stars: self.progress.record(pack, idx, stars),
-                        has_next=has_next, ascii=self.ascii)
-        return view.run()
+        saved = self.progress.get_save(pack, idx)
+        game = Game.from_dict(puzzle, saved) if saved else None
+        elapsed = float(saved.get('elapsed', 0)) if game else 0.0
+        view = GameView(self.scr, self.colors, game or Game(puzzle), title, self.settings,
+                        on_win=lambda stars, secs: self.progress.record(pack, idx, stars, secs),
+                        has_next=has_next, ascii=self.ascii, elapsed=elapsed,
+                        best_time=self.progress.best_time(pack, idx), resumed=game is not None)
+        result = view.run()
+        # Keep an unfinished level for next time; a restart or an ending clears it.
+        if view.game.over or result == 'restart' or not view.game.undo_stack:
+            self.progress.drop_save(pack, idx)
+        else:
+            self.progress.put_save(pack, idx, dict(view.game.to_dict(), elapsed=view.elapsed()))
+        return result
 
     def play_file(self, puzzle, title):
         while True:

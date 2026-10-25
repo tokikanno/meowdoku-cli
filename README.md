@@ -19,7 +19,7 @@ meowdoku 10 42         # 直接玩 pack 10 第 42 關
 meowdoku --file level.txt
 ```
 
-第一次執行時會從原 repo 下載關卡，快取在 `~/.cache/meowdoku/`；通關紀錄存在 `~/.local/share/meowdoku/progress.json`。
+第一次執行時會從原 repo 下載關卡，快取在 `~/.cache/meowdoku/`；通關紀錄、最佳時間和未完成關卡的存檔都在 `~/.local/share/meowdoku/progress.json`。
 
 | 參數 | 說明 |
 |---|---|
@@ -27,7 +27,7 @@ meowdoku --file level.txt
 | `--levels-dir DIR` | 使用本機的 bundle 目錄（例如原 repo 的 `levels/bundle/`），不下載 |
 | `--ascii` | 只用 ASCII 符號 |
 
-遊戲中按 `?` 查看熱鍵。規劃與設計決策見 [PLAN.md](PLAN.md)。
+遊戲中按 `?` 查看熱鍵。除錯時可以設定 `MEOWDOKU_KEYLOG=檔案路徑`，程式會把收到的每個按鍵和造成盤面變化的按鍵記錄下來。設定 `MEOWDOKU_PALETTE=0` 可以讓程式不修改終端機的調色盤。規劃與設計決策見 [PLAN.md](PLAN.md)。
 
 ## 測試
 

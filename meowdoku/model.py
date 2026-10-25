@@ -131,22 +131,26 @@ class Game:
         return result
 
     def forced_cell(self):
-        """First cell, in reading order, that is the only one left unmarked in its row,
-        column or region (which has no cat yet). Guesses count as unmarked: they're
-        tentative, and revealing on a guess could cost a heart."""
+        """A cell that must hold a cat: the only one left unmarked in a region (checked
+        first, as that's what a player looks for), else in a row or column. Units that
+        already have a cat are skipped; ties go to reading order. Guesses count as
+        unmarked: they're tentative, and revealing on a guess could cost a heart."""
         n = self.n
-        units = ([[(r, c) for c in range(n)] for r in range(n)]
-                 + [[(r, c) for r in range(n)] for c in range(n)]
-                 + [self.region_cells(reg) for reg in range(n)])
-        forced = set()
-        for unit in units:
-            states = [self.board[r][c] for r, c in unit]
-            if CAT in states:
-                continue
-            open_cells = [cell for cell, st in zip(unit, states) if st in (EMPTY, GUESS)]
-            if len(open_cells) == 1:
-                forced.add(open_cells[0])
-        return min(forced) if forced else None
+        regions = [self.region_cells(reg) for reg in range(n)]
+        lines = ([[(r, c) for c in range(n)] for r in range(n)]
+                 + [[(r, c) for r in range(n)] for c in range(n)])
+        for units in (regions, lines):
+            forced = set()
+            for unit in units:
+                states = [self.board[r][c] for r, c in unit]
+                if CAT in states:
+                    continue
+                open_cells = [cell for cell, st in zip(unit, states) if st in (EMPTY, GUESS)]
+                if len(open_cells) == 1:
+                    forced.add(open_cells[0])
+            if forced:
+                return min(forced)
+        return None
 
     def _auto_mark(self, r, c):
         n, reg = self.n, self.region(r, c)
@@ -235,6 +239,34 @@ class Game:
         for r, c in cells:
             self._set(r, c, EMPTY)
         self.end()
+
+    # ── save / restore ───────────────────────────────────────────────────────
+
+    def to_dict(self):
+        self.end()
+        return {'board': [row[:] for row in self.board], 'hearts': self.hearts,
+                'guess_mode': self.guess_mode,
+                'undo': [[[list(d) for d in m.diffs], m.cost] for m in self.undo_stack],
+                'redo': [[[list(d) for d in m.diffs], m.cost] for m in self.redo_stack]}
+
+    @classmethod
+    def from_dict(cls, puzzle, data):
+        """Rebuild a saved game, or return None if the save doesn't fit this puzzle."""
+        try:
+            game = cls(puzzle, hearts=int(data['hearts']))
+            board = [[int(v) for v in row] for row in data['board']]
+            if len(board) != game.n or any(len(row) != game.n for row in board):
+                return None
+            if any(not EMPTY <= v <= WRONG for row in board for v in row):
+                return None
+            game.board = board
+            game.guess_mode = bool(data.get('guess_mode'))
+            for key, stack in (('undo', game.undo_stack), ('redo', game.redo_stack)):
+                for diffs, cost in data.get(key, []):
+                    stack.append(Move([tuple(int(v) for v in d) for d in diffs], int(cost)))
+            return None if game.over else game
+        except (KeyError, TypeError, ValueError):
+            return None
 
     # ── undo / redo ──────────────────────────────────────────────────────────
     # Undo never refunds a heart and redo charges it again, as in the web game.

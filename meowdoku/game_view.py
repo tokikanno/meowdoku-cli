@@ -3,18 +3,29 @@
 import curses
 import itertools
 import re
+import time
 import unicodedata
 
 from .model import CAT, EMPTY, GUESS, HEARTS_MAX, MARK, WRONG
 from .term import (CTRL_G, CTRL_R, CTRL_X, ENTER, ESC, MOVES, SHIFT_MOVES, Screen,
-                   text_width)
+                   fmt_time, log_key, text_width)
 
-SYMBOLS = {EMPTY: '', MARK: '×', GUESS: '△', CAT: '🐱', WRONG: '╳'}
+# Every symbol is 2 columns wide and every cell an even width, so all of them center.
+SYMBOLS = {EMPTY: '', MARK: '❌', GUESS: '❓', CAT: '🐱', WRONG: '💥'}
 SYMBOLS_ASCII = {EMPTY: '', MARK: 'x', GUESS: '?', CAT: '@', WRONG: '!'}
 
-# (cell width, cell height, grid lines), largest first; the first that fits wins.
-# With grid lines a cell's pitch is one more than its size in each direction.
-CELL_SIZES = [(7, 3, True), (3, 1, True), (4, 1, False)]
+# Board styles, switched with `b`:
+#   grid    every cell an equal block; region edges drawn as lines in the gaps
+#   lines   like grid, but every cell is boxed in, region edge or not
+#   blocks  no gaps; the row between two cells is split by half blocks (▀), so each
+#           cell is exactly one pitch tall and regions meet edge to edge
+#   plain   fallback for small terminals: cells side by side, no gap rows
+# Cell sizes per style, largest first; the first that fits wins.
+CELL_SIZES = {'grid': [(8, 3), (4, 1)], 'lines': [(8, 3), (4, 1)],
+              'blocks': [(8, 3), (4, 1)], 'plain': [(4, 1)]}
+STYLES = ['grid', 'lines', 'blocks']  # the order `b` cycles through
+DEFAULT_STYLE = 'blocks'  # falls back to grid without 256 colors
+STYLE_NAMES = {'grid': '框線版', 'lines': '全格線版', 'blocks': '色塊版'}
 LABEL_W = 3  # room for the row letters left of the board
 CHROME_H = 7  # header + column labels above the board, gap + 4 footer lines below
 
@@ -33,6 +44,7 @@ HELP = [
     (':', '跳到指定格子：字母 + 數字，例如 c5'),
     ('a', '切換翻開後自動標記'),
     ('t', '切換座標提示'),
+    ('b', '切換盤面畫法：框線版 → 全格線版 → 色塊版'),
     ('u / Ctrl-R', 'undo / redo'),
     ('r', '重新開始這一關'),
     ('n', '下一關（結束後；過關後也可以按 Enter）'),
@@ -72,7 +84,7 @@ class GameView(Screen):
     """Plays one level. run() returns 'quit', 'menu', 'next' or 'restart'."""
 
     def __init__(self, scr, colors, game, title, settings, on_win=None, has_menu=True,
-                 has_next=True, ascii=False):
+                 has_next=True, ascii=False, elapsed=0.0, best_time=None, resumed=False):
         super().__init__(scr, colors)
         self.game = game
         self.title = title
@@ -88,42 +100,84 @@ class GameView(Screen):
         self.drag = None  # {'target': state painted, 'sticky': True for v mode}
         self.prompt = None  # text typed after ':', while jumping
         self.result = None
+        self.best_time = best_time
+        self.clock_base = elapsed  # seconds played before this screen opened
+        # A fresh level's clock waits for the first mark, guess or reveal; a resumed
+        # one was already running, so it carries on at once.
+        self.clock_start = None
+        self.clock_stop = None  # frozen total once the level is over
+        if resumed:
+            self.start_clock()
+        if resumed:
+            self.show_toast('接續上次的進度')
+
+    def start_clock(self):
+        if self.clock_start is None:
+            self.clock_start = time.monotonic()
+            self.tick = 1.0
+
+    def elapsed(self):
+        if self.clock_stop is not None:
+            return self.clock_stop
+        if self.clock_start is None:
+            return self.clock_base
+        return self.clock_base + time.monotonic() - self.clock_start
 
     # ── drawing ──────────────────────────────────────────────────────────────
 
     def layout(self):
+        """(style, cw, ch, x0, y0, geometry) for the largest board that fits, or None.
+        A cell (r, c) sits at (by + oy + r * py, bx + ox + c * px)."""
         h, w = self.scr.getmaxyx()
         n = self.game.n
-        for cw, ch, grid in CELL_SIZES:
-            g = 1 if grid else 0
-            bw = LABEL_W + n * (cw + g) + g
-            bh = CHROME_H + n * (ch + g) + g
-            if bw <= w and bh <= h:
-                return cw, ch, grid, max(0, (w - bw) // 2), max(0, (h - bh) // 2)
+        style = self.settings.get('style', DEFAULT_STYLE)
+        if style == 'blocks' and not self.colors.rich:
+            style = 'grid'
+        for st in (style, 'plain'):
+            for cw, ch in CELL_SIZES[st]:
+                if st in ('grid', 'lines'):
+                    geo = (cw + 1, ch + 1, 1, 1, n * (cw + 1) + 1, n * (ch + 1) + 1)
+                elif st == 'blocks':
+                    geo = (cw, ch + 1, 0, 1, n * cw, n * (ch + 1) + 1)
+                else:
+                    geo = (cw, ch, 0, 0, n * cw, n * ch)
+                bw, bh = LABEL_W + geo[4], CHROME_H + geo[5]
+                if bw <= w and bh <= h:
+                    return st, cw, ch, max(0, (w - bw) // 2), max(0, (h - bh) // 2), geo
         return None
 
     def draw(self):
         self.scr.erase()
+        self.colors.new_frame()
         lay = self.layout()
         if lay is None:
             n = self.game.n
-            cw, ch, _ = CELL_SIZES[-1]
+            cw, ch = CELL_SIZES['plain'][-1]
             self.put(0, 0, f'終端機太小，至少需要 {LABEL_W + n * cw}×{CHROME_H + n * ch}')
             return
-        cw, ch, grid, x0, y0 = lay
-        g = 1 if grid else 0
-        bx, by = x0 + LABEL_W, y0 + 2  # top-left of the board (of its frame, with a grid)
+        style, cw, ch, x0, y0, (px, py, ox, oy, board_w, board_h) = lay
+        bx, by = x0 + LABEL_W, y0 + 2  # top-left of the board, frame included
+        n = self.game.n
+
+        def cell_xy(r, c):
+            return bx + ox + c * px, by + oy + r * py
+
         self.draw_header(y0, x0)
         if self.settings.get('show_coords') or self.prompt is not None:
-            self.draw_coords(bx + g, by + g, cw + g, ch + g, cw, ch)
-        n = self.game.n
+            for c in range(n):
+                label = str(c + 1)
+                self.put(by - 1, cell_xy(0, c)[0] + (cw - len(label)) // 2, label, curses.A_DIM)
+            for r in range(n):
+                self.put(cell_xy(r, 0)[1] + (ch - 1) // 2, x0, chr(ord('A') + r), curses.A_DIM)
+        if style == 'blocks':
+            self.draw_blocks(bx, by, cw, ch)
         for r in range(n):
             for c in range(n):
-                self.draw_cell(r, c, bx + g + c * (cw + g), by + g + r * (ch + g), cw, ch,
-                               brackets=not grid)
-        if grid:
-            self.draw_grid(bx, by, cw, ch)
-        self.draw_footer(by + n * (ch + g) + g + 1, x0)
+                self.draw_cell(r, c, *cell_xy(r, c), cw, ch,
+                               brackets=style not in ('grid', 'lines'))
+        if style in ('grid', 'lines'):
+            self.draw_grid(bx, by, cw, ch, every_cell=style == 'lines')
+        self.draw_footer(by + board_h + 1, x0)
         self.draw_overlay()
 
     def draw_overlay(self):
@@ -152,21 +206,12 @@ class GameView(Screen):
         g = self.game
         hearts = self.hearts[0] * g.hearts + self.hearts[1] * (HEARTS_MAX - g.hearts)
         mode = f'猜測 {self.symbols[GUESS]}' if g.guess_mode else f'無貓 {self.symbols[MARK]}'
-        for text, attr in ((f'{self.title}  {hearts}  ', curses.A_BOLD),
+        for text, attr in ((f'{self.title}  {hearts}  {fmt_time(self.elapsed())}  ', curses.A_BOLD),
                            (f' {mode} ', curses.A_REVERSE if g.guess_mode else curses.A_BOLD),
                            (f'  自動標記:{"開" if g.auto_mark else "關"}', 0),
                            (self.drag_label(), curses.A_REVERSE)):
             self.put(y, x, text, attr)
             x += text_width(text)
-
-    def draw_coords(self, x, y, pitch_x, pitch_y, cw, ch):
-        for c in range(self.game.n):
-            label = str(c + 1)
-            self.put(y - 2 if pitch_y > ch else y - 1, x + c * pitch_x + (cw - len(label)) // 2,
-                     label, curses.A_DIM)
-        for r in range(self.game.n):
-            self.put(y + r * pitch_y + (ch - 1) // 2, x - LABEL_W - (pitch_x - cw),
-                     chr(ord('A') + r), curses.A_DIM)
 
     def draw_cell(self, r, c, x, y, cw, ch, brackets):
         g = self.game
@@ -180,29 +225,45 @@ class GameView(Screen):
         if sym:
             self.put(y + (ch - 1) // 2, x + (cw - text_width(sym)) // 2, sym, attr | curses.A_BOLD)
         if brackets and (r, c) == self.cur:
+            cursor = self.colors.cursor
+            if self.colors.rich:  # yellow brackets on the cell's own background
+                cursor = self.colors.pair(self.colors.cursor_fg, self.cell_slot(r, c)) | curses.A_BOLD
             for dy in range(ch):
-                self.put(y + dy, x, '[', self.colors.cursor)
-                self.put(y + dy, x + cw - 1, ']', self.colors.cursor)
+                self.put(y + dy, x, '[', cursor)
+                self.put(y + dy, x + cw - 1, ']', cursor)
 
-    def draw_grid(self, bx, by, cw, ch):
-        """Outline each region; inside a region the grid gap takes the region's color."""
+    def cell_slot(self, r, c):
+        return self.colors.slot(self.game.region(r, c), dim=self.game.board[r][c] == MARK)
+
+    def draw_blocks(self, bx, by, cw, ch):
+        """The rows between cells: upper half takes the cell above, lower half the cell
+        below, so every cell grows by half a row each way and all stay the same size."""
+        n, default = self.game.n, self.colors.default_bg
+        for lr in range(n + 1):
+            for c in range(n):
+                upper = self.cell_slot(lr - 1, c) if lr > 0 else None
+                lower = self.cell_slot(lr, c) if lr < n else None
+                if upper is None:
+                    char, attr = '▄', self.colors.pair(lower, default)
+                elif lower is None:
+                    char, attr = '▀', self.colors.pair(upper, default)
+                else:
+                    char, attr = '▀', self.colors.pair(upper, lower)
+                self.put(by + lr * (ch + 1), bx + c * cw, char * cw, attr)
+
+    def draw_grid(self, bx, by, cw, ch, every_cell=False):
+        """Lines in the gaps between cells: around each region, or around every cell."""
         n, reg = self.game.n, self.game.region
 
         def h_edge(lr, c):  # horizontal line lr (0..n) above row lr, over column c
-            return lr in (0, n) or reg(lr - 1, c) != reg(lr, c)
+            return every_cell or lr in (0, n) or reg(lr - 1, c) != reg(lr, c)
 
         def v_edge(r, lc):  # vertical line lc (0..n) left of column lc, beside row r
-            return lc in (0, n) or reg(r, lc - 1) != reg(r, lc)
+            return every_cell or lc in (0, n) or reg(r, lc - 1) != reg(r, lc)
 
         def junction(lr, lc):  # (up, down, left, right) edges meeting at a grid point
             return (int(lr > 0 and v_edge(lr - 1, lc)), int(lr < n and v_edge(lr, lc)),
                     int(lc > 0 and h_edge(lr, lc - 1)), int(lc < n and h_edge(lr, lc)))
-
-        def fill(*cells):
-            # A gap inside a region is dimmed when every cell it touches is settled
-            # (marked or a cat), so a cat cell stays a clean bright block.
-            dim = all(self.game.board[r][c] in (MARK, CAT) for r, c in cells)
-            return self.colors.region(reg(*cells[0]), dim=dim)
 
         def h_line(lr, c, attr, edge):
             self.put(by + lr * (ch + 1), bx + 1 + c * (cw + 1), ('─' if edge else ' ') * cw, attr)
@@ -213,18 +274,13 @@ class GameView(Screen):
 
         for lr, c in itertools.product(range(n + 1), range(n)):
             edge = h_edge(lr, c)
-            h_line(lr, c, 0 if edge else fill((lr - 1, c), (lr, c)), edge)
+            h_line(lr, c, 0, edge)
         for r, lc in itertools.product(range(n), range(n + 1)):
             edge = v_edge(r, lc)
-            v_line(r, lc, 0 if edge else fill((r, lc - 1), (r, lc)), edge)
+            v_line(r, lc, 0, edge)
         for lr, lc in itertools.product(range(n + 1), range(n + 1)):
             key = junction(lr, lc)
-            # No edge at a grid point means all four cells around it share a region.
-            if any(key):
-                self.put(by + lr * (ch + 1), bx + lc * (cw + 1), BOX[key], 0)
-            else:
-                cells = [(lr - 1, lc - 1), (lr - 1, lc), (lr, lc - 1), (lr, lc)]
-                self.put(by + lr * (ch + 1), bx + lc * (cw + 1), ' ', fill(*cells))
+            self.put(by + lr * (ch + 1), bx + lc * (cw + 1), BOX[key] if any(key) else ' ', 0)
 
         # The cursor is a full frame around its cell, merged into the region edges it meets.
         r0, c0 = self.cur
@@ -253,7 +309,7 @@ class GameView(Screen):
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
         self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  HJKL 同色批次  s 輔助  : 跳轉',
                  curses.A_DIM)
-        self.put(y + 3, x, f'r 重來  {"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
+        self.put(y + 3, x, f'r 重來  b 畫法  {"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
                  curses.A_DIM)
 
     def drag_label(self):
@@ -270,12 +326,25 @@ class GameView(Screen):
 
     def over_lines(self):
         g = self.game
-        head = ('過關！' + '★' * g.hearts + '☆' * (HEARTS_MAX - g.hearts)) if g.won else '生命用完了'
-        return [head, '', self.over_keys(), '其他鍵：關閉這個視窗']
+        if not g.won:
+            return ['生命用完了', '', self.over_keys(), '其他鍵：關閉這個視窗']
+        took = self.elapsed()
+        if self.best_time is None or took < self.best_time:
+            timing = f'用時 {fmt_time(took)} · 新紀錄！'
+        else:
+            timing = f'用時 {fmt_time(took)}（最佳 {fmt_time(self.best_time)}）'
+        head = '過關！' + '★' * g.hearts + '☆' * (HEARTS_MAX - g.hearts)
+        return [head, timing, '', self.over_keys(), '其他鍵：關閉這個視窗']
 
     # ── input ────────────────────────────────────────────────────────────────
 
     def run(self):
+        try:
+            return self._run()
+        except KeyboardInterrupt:
+            return 'quit'  # Ctrl-C: leave like Ctrl-X, so the level still gets saved
+
+    def _run(self):
         while self.result is None:
             self.draw()
             self.scr.refresh()
@@ -288,6 +357,8 @@ class GameView(Screen):
                 self.handle_modal(key)
             else:
                 self.handle_key(key)
+            if self.game.undo_stack or self.game.in_move:
+                self.start_clock()  # the first change to the board starts the clock
         return self.result
 
     def handle_modal(self, key):
@@ -301,6 +372,15 @@ class GameView(Screen):
             self.handle_key(key)
 
     def handle_key(self, key):
+        g = self.game
+        before = [row[:] for row in g.board]
+        try:
+            self._handle_key(key)
+        finally:
+            if g.board != before:
+                log_key('  board changed by', repr(key), 'at', repr(self.cur))
+
+    def _handle_key(self, key):
         g = self.game
         if self.prompt is not None:
             self.handle_prompt(key)
@@ -352,6 +432,13 @@ class GameView(Screen):
             g.auto_mark = self.settings['auto_mark'] = not g.auto_mark
         elif key == 't':
             self.settings['show_coords'] = not self.settings.get('show_coords')
+        elif key == 'b':
+            current = self.settings.get('style', DEFAULT_STYLE)
+            style = STYLES[(STYLES.index(current) + 1) % len(STYLES)]
+            if style == 'blocks' and not self.colors.rich:
+                style = STYLES[0]  # blocks need 256 colors; skip it
+            self.settings['style'] = style
+            self.show_toast(STYLE_NAMES[style])
         elif key == 'u':
             if not g.undo():
                 self.show_toast('沒有可以復原的步驟')
@@ -431,5 +518,7 @@ class GameView(Screen):
             self.show_toast(f'翻錯了！剩 {g.hearts} 格生命')
         if result and g.over:
             self.modal = 'over'
+            self.clock_stop = self.elapsed()
+            self.tick = None
             if g.won and self.on_win:
-                self.on_win(g.hearts)
+                self.on_win(g.hearts, self.clock_stop)

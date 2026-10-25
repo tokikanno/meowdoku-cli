@@ -135,30 +135,52 @@ def data_dir():
 
 
 class Progress:
-    """Cleared levels as {"pack:idx": stars}, the web game's `meowdoku_done` format."""
+    """Per-player state in one JSON file:
+    stars  {"pack:idx": 1..3}, the web game's `meowdoku_done` format (best kept)
+    times  {"pack:idx": seconds}, best clear time
+    saves  {"pack:idx": Game.to_dict() + elapsed}, levels left unfinished
+    last   {"pack": ..., "level": ...}, the level played most recently"""
 
     def __init__(self, path=None):
         self.path = Path(path) if path else data_dir() / 'progress.json'
-        self.stars = {}
-        self.last = {}
+        self.stars, self.times, self.saves, self.last = {}, {}, {}, {}
         try:
             data = json.loads(self.path.read_text(encoding='utf-8'))
             self.stars = {k: int(v) for k, v in data.get('stars', {}).items()}
+            self.times = {k: float(v) for k, v in data.get('times', {}).items()}
+            self.saves = dict(data.get('saves', {}))
             self.last = data.get('last', {})
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError, TypeError):
             pass
 
     def get(self, pack, idx):
         return self.stars.get(f'{pack}:{idx}', 0)
 
-    def record(self, pack, idx, stars):
+    def best_time(self, pack, idx):
+        return self.times.get(f'{pack}:{idx}')
+
+    def record(self, pack, idx, stars, seconds=None):
         key = f'{pack}:{idx}'
         self.stars[key] = max(self.stars.get(key, 0), stars)
+        if seconds is not None:
+            self.times[key] = min(self.times.get(key, seconds), seconds)
+        self.saves.pop(key, None)
         self.save()
 
     def set_last(self, pack, idx):
         self.last = {'pack': pack, 'level': idx}
         self.save()
+
+    def get_save(self, pack, idx):
+        return self.saves.get(f'{pack}:{idx}')
+
+    def put_save(self, pack, idx, state):
+        self.saves[f'{pack}:{idx}'] = state
+        self.save()
+
+    def drop_save(self, pack, idx):
+        if self.saves.pop(f'{pack}:{idx}', None) is not None:
+            self.save()
 
     def cleared(self, pack):
         prefix = f'{pack}:'
@@ -171,8 +193,9 @@ class Progress:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix('.tmp')
-            tmp.write_text(json.dumps({'v': 1, 'stars': self.stars, 'last': self.last},
-                                      ensure_ascii=False, sort_keys=True), encoding='utf-8')
+            data = {'v': 1, 'stars': self.stars, 'times': self.times, 'saves': self.saves,
+                    'last': self.last}
+            tmp.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding='utf-8')
             tmp.replace(self.path)
         except OSError:
             pass  # progress is a convenience; never crash the game over it

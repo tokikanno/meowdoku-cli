@@ -10,6 +10,8 @@ from meowdoku.game_view import BOX
 from meowdoku.levels import LevelError, LevelStore, Progress, parse_level
 from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game
 from meowdoku.solver import solve
+from meowdoku.term import (REGION_COLORS, REGION_COLORS_DIM, PairPool, assign_slots,
+                           hex_to_rgb)
 
 LEVEL = """6
 AAACCB
@@ -125,7 +127,9 @@ class GameTest(unittest.TestCase):
             g.toggle_mark(0, c)
         self.assertIsNone(g.forced_cell())
         g.toggle_mark(0, 5)
-        self.assertEqual(g.forced_cell(), (0, 1))
+        # Row A is down to A2, but marking A6 also left region B with only B6,
+        # and regions come first.
+        self.assertEqual(g.forced_cell(), (1, 5))
 
     def test_forced_cell_reading_order_and_guesses(self):
         g = new_game()
@@ -136,15 +140,47 @@ class GameTest(unittest.TestCase):
             g.toggle_mark(4, c)
         self.assertEqual(g.forced_cell(), (5, 0))
         g.guess_mode = False
-        for c in range(1, 6):  # region F is down to D6, which comes before E1 and F1
+        for c in range(1, 6):  # region F is down to D6: a region beats rows E and F
             g.toggle_mark(4, c)
         self.assertEqual(g.forced_cell(), (3, 5))
+
+    def test_forced_cell_prefers_regions(self):
+        g = new_game()
+        for c in range(1, 6):  # row C: only C1 left (a row deduction)
+            g.toggle_mark(2, c)
+        # Region F: (3,5), (4,5), (5,4), (5,5) — leave only (5,5), later in reading order.
+        for cell in [(3, 5), (4, 5), (5, 4)]:
+            g.toggle_mark(*cell)
+        self.assertEqual(g.forced_cell(), (5, 5))
 
     def test_forced_cell_skips_solved_units(self):
         g = new_game()
         g.reveal(0, 1)  # auto-mark leaves row A, column 2 and region A solved
         cell = g.forced_cell()
         self.assertTrue(cell is None or g.board[cell[0]][cell[1]] == EMPTY)
+
+    def test_save_round_trip(self):
+        g = new_game()
+        g.toggle_mark(0, 0)
+        g.reveal(2, 2)  # wrong: costs a heart
+        g.guess_mode = True
+        g.toggle_mark(3, 3)
+        g.undo()
+        data = json.loads(json.dumps(g.to_dict()))
+        h = Game.from_dict(g.puzzle, data)
+        self.assertEqual((h.board, h.hearts, h.guess_mode), (g.board, g.hearts, True))
+        self.assertTrue(h.redo())
+        self.assertEqual(h.board[3][3], GUESS)
+        h.undo()
+        h.undo()
+        self.assertEqual(h.board[2][2], EMPTY)
+        self.assertEqual(h.hearts, 2)  # undo still never refunds
+
+    def test_bad_save_rejected(self):
+        p = parse_level(LEVEL)
+        self.assertIsNone(Game.from_dict(p, {'board': [[0] * 5] * 5, 'hearts': 3}))
+        self.assertIsNone(Game.from_dict(p, {'hearts': 3}))
+        self.assertIsNone(Game.from_dict(p, {'board': [[0] * 6] * 6, 'hearts': 0}))
 
     def test_noop_move_not_recorded(self):
         g = new_game()
@@ -311,11 +347,52 @@ class ProgressTest(unittest.TestCase):
             self.assertEqual(p.unsolved('8', 4), [1, 2, 4])
             self.assertEqual(p.last, {'pack': '8', 'level': 3})
 
+    def test_times_and_saves(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'progress.json'
+            p = Progress(path)
+            p.put_save('6', 1, {'board': [], 'elapsed': 3})
+            p.record('6', 1, 3, 90.0)
+            p.record('6', 1, 2, 120.0)
+            p = Progress(path)
+            self.assertEqual(p.best_time('6', 1), 90.0)
+            self.assertIsNone(p.get_save('6', 1))  # clearing a level drops its save
+            p.put_save('6', 2, {'x': 1})
+            p.drop_save('6', 2)
+            self.assertEqual(Progress(path).saves, {})
+
     def test_corrupt_file_ignored(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'progress.json'
             path.write_text('not json')
             self.assertEqual(Progress(path).stars, {})
+
+
+class ColorTest(unittest.TestCase):
+    def test_slots_are_distinct_and_avoid_reserved(self):
+        rgbs = [hex_to_rgb(h) for h in REGION_COLORS + REGION_COLORS_DIM]
+        slots = assign_slots(rgbs, reserved=[16, 231, 226])
+        self.assertEqual(len(set(slots)), len(rgbs))
+        self.assertFalse({16, 231, 226} & set(slots))
+        self.assertTrue(all(16 <= s <= 255 for s in slots))
+
+
+class PairPoolTest(unittest.TestCase):
+    def test_reuses_pairs_from_old_frames(self):
+        inits = []
+        pool = PairPool(250, 256, lambda pid, fg, bg: inits.append((pid, fg, bg)))
+        first = [pool.get(fg, 0) for fg in range(6)]
+        self.assertEqual(first, list(range(250, 256)))
+        self.assertEqual(pool.get(0, 0), 250)  # cached, no new init
+        self.assertEqual(len(inits), 6)
+        self.assertEqual(pool.get(99, 0), 0)  # all six in use this frame
+        pool.new_frame()
+        pool.get(1, 0)
+        pid = pool.get(99, 0)  # recycles the least recently used: (0, 0)'s pair
+        self.assertEqual(pid, 250)
+        self.assertEqual(inits[-1], (250, 99, 0))
+        self.assertNotEqual(pool.get(0, 0), 250)  # (0, 0) had to get a new number
+        self.assertTrue(all(p < 256 for p, _, _ in inits))
 
 
 class BoxTest(unittest.TestCase):
