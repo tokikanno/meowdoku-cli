@@ -195,8 +195,31 @@ class Screen:
         if key == curses.KEY_RESIZE:
             curses.update_lines_cols()
             return None
+        if key == ESC:
+            key = self.read_escape()
+            if key is None:
+                return None
         self.toast = None
         return key
+
+    def read_escape(self):
+        """After a bare ESC: ESC itself, or None for a sequence we ignore (Alt+key etc.).
+        curses already decodes the sequences it knows (arrows etc.), so what's left is
+        either a real Esc press or a sequence terminfo doesn't describe."""
+        self.scr.timeout(0)
+        seq = ''
+        try:
+            while True:
+                ch = self.scr.get_wch()
+                if not isinstance(ch, str):
+                    break
+                seq += ch
+                # A CSI sequence ends at its final byte; anything else is one char.
+                if not seq.startswith('[') or (len(seq) > 1 and '@' <= ch <= '~'):
+                    break
+        except curses.error:
+            pass  # nothing more queued
+        return ESC if not seq else None
 
     def draw(self):
         raise NotImplementedError

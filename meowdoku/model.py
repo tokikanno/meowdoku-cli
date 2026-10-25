@@ -127,6 +127,28 @@ class Game:
         self.end()
         return result
 
+    def forced_cell(self):
+        """First cell, in reading order, that is the only one left unmarked in its row,
+        column or region (which has no cat yet). Guesses count as unmarked: they're
+        tentative, and revealing on a guess could cost a heart."""
+        n = self.n
+        units = ([[(r, c) for c in range(n)] for r in range(n)]
+                 + [[(r, c) for r in range(n)] for c in range(n)])
+        regions = {}
+        for r in range(n):
+            for c in range(n):
+                regions.setdefault(self.region(r, c), []).append((r, c))
+        units += regions.values()
+        forced = set()
+        for unit in units:
+            states = [self.board[r][c] for r, c in unit]
+            if CAT in states:
+                continue
+            open_cells = [cell for cell, st in zip(unit, states) if st in (EMPTY, GUESS)]
+            if len(open_cells) == 1:
+                forced.add(open_cells[0])
+        return min(forced) if forced else None
+
     def _auto_mark(self, r, c):
         n, reg = self.n, self.region(r, c)
         for i in range(n):

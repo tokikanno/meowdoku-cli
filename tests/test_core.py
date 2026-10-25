@@ -118,6 +118,34 @@ class GameTest(unittest.TestCase):
         g.toggle_mark(1, 1)
         self.assertFalse(g.redo())
 
+    def test_forced_cell(self):
+        g = new_game()
+        self.assertIsNone(g.forced_cell())
+        for c in (0, 2, 3, 4):  # row A: only columns 1 and 5 left
+            g.toggle_mark(0, c)
+        self.assertIsNone(g.forced_cell())
+        g.toggle_mark(0, 5)
+        self.assertEqual(g.forced_cell(), (0, 1))
+
+    def test_forced_cell_reading_order_and_guesses(self):
+        g = new_game()
+        for c in range(1, 6):  # row F: only F1 left
+            g.toggle_mark(5, c)
+        g.guess_mode = True
+        for c in range(1, 6):  # row E: guesses don't count as marks
+            g.toggle_mark(4, c)
+        self.assertEqual(g.forced_cell(), (5, 0))
+        g.guess_mode = False
+        for c in range(1, 6):  # region F is down to D6, which comes before E1 and F1
+            g.toggle_mark(4, c)
+        self.assertEqual(g.forced_cell(), (3, 5))
+
+    def test_forced_cell_skips_solved_units(self):
+        g = new_game()
+        g.reveal(0, 1)  # auto-mark leaves row A, column 2 and region A solved
+        cell = g.forced_cell()
+        self.assertTrue(cell is None or g.board[cell[0]][cell[1]] == EMPTY)
+
     def test_noop_move_not_recorded(self):
         g = new_game()
         g.reveal(0, 1)

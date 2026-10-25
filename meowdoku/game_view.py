@@ -21,6 +21,7 @@ HELP = [
     ('Space', '標記／取消標記（依模式寫入 {X} 或 {G}）'),
     ('g', '切換標記模式：無貓 {X} ↔ 猜測 {G}'),
     ('Enter', '翻開，翻錯扣一格生命'),
+    ('Enter（貓上）', '跳到下一個唯一沒標記的格子並翻開'),
     ('a', '切換翻開後自動標記'),
     ('t', '切換座標提示'),
     ('u / Ctrl-R', 'undo / redo'),
@@ -115,7 +116,7 @@ class GameView(Screen):
     def draw_overlay(self):
         if self.modal == 'help':
             marks = {'X': self.symbols[MARK], 'G': self.symbols[GUESS]}
-            rows = [k + ' ' * (16 - text_width(k)) + v.format(**marks) for k, v in HELP]
+            rows = [k + ' ' * (18 - text_width(k)) + v.format(**marks) for k, v in HELP]
             self.draw_box(['操作說明', ''] + rows + ['', '按任意鍵關閉'], center=False)
         elif self.modal == 'quit':
             self.draw_box(['離開？(y/n)'])
@@ -276,7 +277,14 @@ class GameView(Screen):
         elif key == ' ':
             g.toggle_mark(r, c)
         elif key in ENTER:
-            self.reveal(r, c)
+            if g.board[r][c] == CAT:
+                # On a cat, Enter moves on to the next cell that must be a cat.
+                cell = g.forced_cell()
+                if cell and not g.over:  # nothing to do is silent, by design
+                    self.cur = cell
+                    self.reveal(*cell)
+            else:
+                self.reveal(r, c)
         elif key == 'g':
             g.guess_mode = not g.guess_mode
         elif key == 'a':
