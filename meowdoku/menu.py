@@ -5,7 +5,8 @@ import curses
 from .term import CTRL_X, ENTER, ESC, MOVES, Screen, text_width
 
 PACK_LABELS = {'hard': '困難', 'bad': '需猜測'}
-RANDOM_ANY = '隨機（6～12 任意大小）'
+GENERATE = 'generate'
+GEN_SIZES = list(range(6, 13))
 CONTINUE = 'continue'
 QUIT = '離開'
 
@@ -14,18 +15,25 @@ def pack_label(pack):
     return PACK_LABELS.get(pack, f'{pack}×{pack}')
 
 
-class MainMenu(Screen):
-    """Returns ('pack', pack), ('random', pack or None) or 'quit'."""
+def resume_label(pack, idx):
+    return f'隨機出題 {idx}×{idx}' if pack == 'gen' else f'{pack_label(pack)} #{idx}'
 
-    def __init__(self, scr, colors, store, progress, initial=None):
+
+class MainMenu(Screen):
+    """Returns ('pack', pack), ('random', pack), ('generate', n), ('continue', (pack, idx))
+    or 'quit'."""
+
+    def __init__(self, scr, colors, store, progress, initial=None, gen_size=8):
         super().__init__(scr, colors)
         self.store = store
         self.progress = progress
+        self.gen_size = gen_size
         last = progress.last
         self.resume = None  # (pack, idx) of the last level, if it was left unfinished
-        if last.get('pack') in store.manifest and progress.get_save(last['pack'], last.get('level')):
+        if ((last.get('pack') in store.manifest or last.get('pack') == 'gen')
+                and progress.get_save(last['pack'], last.get('level'))):
             self.resume = (last['pack'], last['level'])
-        self.items = ([CONTINUE] if self.resume else []) + store.packs + [RANDOM_ANY, QUIT]
+        self.items = ([CONTINUE] if self.resume else []) + store.packs + [GENERATE, QUIT]
         self.sel = 0 if self.resume else self.items.index(initial) if initial in self.items else 0
 
     def draw(self):
@@ -34,7 +42,9 @@ class MainMenu(Screen):
         rows = []
         for item in self.items:
             if item == CONTINUE:
-                rows.append(f'繼續：{pack_label(self.resume[0])} #{self.resume[1]}')
+                rows.append(f'繼續：{resume_label(*self.resume)}')
+            elif item == GENERATE:
+                rows.append(f'隨機出題：‹ {self.gen_size}×{self.gen_size} ›')
             elif item in self.store.manifest:
                 count = self.store.count(item)
                 done = self.progress.cleared(item)
@@ -53,7 +63,7 @@ class MainMenu(Screen):
             gap = (1 if self.resume and i >= 1 else 0) + (1 if i >= first_pack + len(self.store.packs) else 0)
             attr = curses.A_REVERSE if i == self.sel else 0
             self.put(y + 3 + i + gap, x, f'  {row}{" " * (width - 2 - text_width(row))}', attr)
-        self.put(y + len(rows) + 5 + (1 if self.resume else 0), x, '↑↓ 選擇 · Enter 確定 · r 這個包隨機一關 · q 離開', curses.A_DIM)
+        self.put(y + len(rows) + 5 + (1 if self.resume else 0), x, '↑↓ 選擇 · ←→ 出題大小 · Enter 確定 · r 這個包隨機一關 · q 離開', curses.A_DIM)
         if self.toast:
             self.draw_box([self.toast[0]])
 
@@ -69,13 +79,16 @@ class MainMenu(Screen):
                 return 'quit'
             if key in MOVES and MOVES[key][1] == 0:
                 self.sel = (self.sel + MOVES[key][0]) % len(self.items)
+            elif key in MOVES and item == GENERATE:
+                i = GEN_SIZES.index(self.gen_size) + MOVES[key][1]
+                self.gen_size = GEN_SIZES[min(max(i, 0), len(GEN_SIZES) - 1)]
             elif key in ENTER:
                 if item == QUIT:
                     return 'quit'
                 if item == CONTINUE:
                     return ('continue', self.resume)
-                if item == RANDOM_ANY:
-                    return ('random', None)
+                if item == GENERATE:
+                    return ('generate', self.gen_size)
                 return ('pack', item)
             elif key == 'r' and item in self.store.manifest:
                 return ('random', item)

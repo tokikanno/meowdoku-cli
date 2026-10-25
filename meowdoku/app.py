@@ -5,12 +5,11 @@ import os
 import random
 
 from .game_view import GameView
-from .levels import LevelError
+from .generator import format_level, generate
+from .levels import LevelError, parse_level
 from .menu import LevelMenu, MainMenu, pack_label
 from .model import Game
 from .term import Colors, Screen
-
-RANDOM_PACKS = [str(n) for n in range(6, 13)]
 
 
 class _Blank(Screen):
@@ -26,23 +25,32 @@ class App:
         self.ascii = ascii
         self.colors = Colors()
         self.settings = {'auto_mark': True, 'show_coords': False}
+        self.gen_size = 8
         self.blank = _Blank(scr, self.colors)
 
     # ── screens ──────────────────────────────────────────────────────────────
 
     def main_menu(self, initial=None):
         while True:
-            choice = MainMenu(self.scr, self.colors, self.store, self.progress, initial).run()
+            menu = MainMenu(self.scr, self.colors, self.store, self.progress, initial, self.gen_size)
+            choice = menu.run()
+            self.gen_size = menu.gen_size
             if choice == 'quit':
                 return
             kind, pack = choice
             if kind == 'continue':
                 pack, idx = pack
-                initial = pack
-                if self.play_pack(pack, idx) == 'quit':
+                initial = 'generate' if pack == 'gen' else pack
+                play = self.play_generated if pack == 'gen' else self.play_pack
+                if play(*([idx] if pack == 'gen' else [pack, idx])) == 'quit':
                     return
                 continue
-            initial = pack or initial
+            if kind == 'generate':
+                initial = 'generate'
+                if self.play_generated(pack) == 'quit':
+                    return
+                continue
+            initial = pack
             if kind == 'random':
                 result = self.play_random(pack)
             else:
@@ -78,18 +86,16 @@ class App:
             elif result != 'restart':
                 return result
 
-    def play_random(self, pack=None):
-        """Random unsolved levels from `pack`, or from any of 6..12 when None."""
-        current = None
+    def play_random(self, pack):
+        """Random unsolved levels from `pack`."""
+        idx = None
         while True:
-            if current is None:
-                p = pack or random.choice(RANDOM_PACKS)
-                count = self.store.count(p)
-                current = (p, random.choice(self.progress.unsolved(p, count) or range(1, count + 1)))
-            p, idx = current
-            result = self.play_one(p, idx, f'隨機 · {pack_label(p)} #{idx}', has_next=True)
+            if idx is None:
+                count = self.store.count(pack)
+                idx = random.choice(self.progress.unsolved(pack, count) or range(1, count + 1))
+            result = self.play_one(pack, idx, f'隨機 · {pack_label(pack)} #{idx}', has_next=True)
             if result == 'next':
-                current = None
+                idx = None
             elif result != 'restart':
                 return result
 
@@ -99,20 +105,46 @@ class App:
         except LevelError as e:
             self.error(str(e))
             return 'menu'
+        return self.run_level(puzzle, pack, idx, title, has_next,
+                              on_win=lambda stars, secs: self.progress.record(pack, idx, stars, secs),
+                              best_time=self.progress.best_time(pack, idx))
+
+    def play_generated(self, n):
+        """Freshly generated n×n levels; an unfinished one is resumed first."""
+        saved = self.progress.get_save('gen', n)
+        puzzle = None
+        if saved:
+            try:
+                puzzle = parse_level(saved['level'])
+            except (LevelError, KeyError, TypeError):
+                self.progress.drop_save('gen', n)
+        while True:
+            if puzzle is None:
+                self.blank.busy(f'產生 {n}×{n} 關卡中…')
+                puzzle = generate(n)
+            result = self.run_level(puzzle, 'gen', n, f'隨機出題 {n}×{n}', has_next=True,
+                                    extra={'level': format_level(puzzle)})
+            if result == 'next':
+                puzzle = None
+            elif result != 'restart':
+                return result
+
+    def run_level(self, puzzle, pack, idx, title, has_next, on_win=None, best_time=None, extra=None):
+        """Play one puzzle, resuming and saving it under (pack, idx)."""
         self.progress.set_last(pack, idx)
         saved = self.progress.get_save(pack, idx)
         game = Game.from_dict(puzzle, saved) if saved else None
         elapsed = float(saved.get('elapsed', 0)) if game else 0.0
         view = GameView(self.scr, self.colors, game or Game(puzzle), title, self.settings,
-                        on_win=lambda stars, secs: self.progress.record(pack, idx, stars, secs),
-                        has_next=has_next, ascii=self.ascii, elapsed=elapsed,
-                        best_time=self.progress.best_time(pack, idx), resumed=game is not None)
+                        on_win=on_win, has_next=has_next, ascii=self.ascii, elapsed=elapsed,
+                        best_time=best_time, resumed=game is not None)
         result = view.run()
         # Keep an unfinished level for next time; a restart or an ending clears it.
         if view.game.over or result == 'restart' or not view.game.undo_stack:
             self.progress.drop_save(pack, idx)
         else:
-            self.progress.put_save(pack, idx, dict(view.game.to_dict(), elapsed=view.elapsed()))
+            state = dict(view.game.to_dict(), elapsed=view.elapsed(), **(extra or {}))
+            self.progress.put_save(pack, idx, state)
         return result
 
     def play_file(self, puzzle, title):
@@ -131,7 +163,8 @@ class App:
 
 
 def run(start, store=None, progress=None, ascii=False):
-    """start: ('menu',), ('pack', pack), ('play', pack, idx) or ('file', puzzle, title)."""
+    """start: ('menu',), ('pack', pack), ('play', pack, idx), ('generate', n)
+    or ('file', puzzle, title)."""
     os.environ.setdefault('ESCDELAY', '25')
 
     def main(scr):
@@ -149,6 +182,11 @@ def run(start, store=None, progress=None, ascii=False):
         elif kind == 'play':
             initial = start[1]
             if app.play_pack(start[1], start[2]) == 'quit':
+                return
+        elif kind == 'generate':
+            initial = 'generate'
+            app.gen_size = start[1]
+            if app.play_generated(start[1]) == 'quit':
                 return
         else:
             initial = progress.last.get('pack')

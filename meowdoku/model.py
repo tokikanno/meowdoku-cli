@@ -131,26 +131,21 @@ class Game:
         return result
 
     def forced_cell(self):
-        """A cell that must hold a cat: the only one left unmarked in a region (checked
-        first, as that's what a player looks for), else in a row or column. Units that
-        already have a cat are skipped; ties go to reading order. Guesses count as
-        unmarked: they're tentative, and revealing on a guess could cost a heart."""
-        n = self.n
-        regions = [self.region_cells(reg) for reg in range(n)]
-        lines = ([[(r, c) for c in range(n)] for r in range(n)]
-                 + [[(r, c) for r in range(n)] for c in range(n)])
-        for units in (regions, lines):
-            forced = set()
-            for unit in units:
-                states = [self.board[r][c] for r, c in unit]
-                if CAT in states:
-                    continue
-                open_cells = [cell for cell, st in zip(unit, states) if st in (EMPTY, GUESS)]
-                if len(open_cells) == 1:
-                    forced.add(open_cells[0])
-            if forced:
-                return min(forced)
-        return None
+        """The cell of a region (with no cat yet) that has exactly one unmarked cell
+        left, first in reading order. Only regions count: a row or column down to one
+        cell is a deduction for the player to make, not a shortcut to take for them.
+        Guesses count as unmarked: they're tentative, and revealing on a guess could
+        cost a heart."""
+        forced = []
+        for reg in range(self.n):
+            cells = self.region_cells(reg)
+            states = [self.board[r][c] for r, c in cells]
+            if CAT in states:
+                continue
+            open_cells = [cell for cell, st in zip(cells, states) if st in (EMPTY, GUESS)]
+            if len(open_cells) == 1:
+                forced.append(open_cells[0])
+        return min(forced) if forced else None
 
     def _auto_mark(self, r, c):
         n, reg = self.n, self.region(r, c)

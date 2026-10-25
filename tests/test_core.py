@@ -5,11 +5,13 @@ import unittest
 from pathlib import Path
 
 import itertools
+import random
 
 from meowdoku.game_view import BOX, line_code
+from meowdoku.generator import format_level, generate, logic_solvable
 from meowdoku.levels import LevelError, LevelStore, Progress, parse_level
 from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game
-from meowdoku.solver import solve
+from meowdoku.solver import solutions
 from meowdoku.term import (REGION_COLORS, REGION_COLORS_DIM, PairPool, assign_slots,
                            hex_to_rgb)
 
@@ -40,7 +42,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(parse_level(text).solution, (1, 5, 3, 0, 2, 4))
 
     def test_solution_is_unique(self):
-        self.assertEqual(solve(parse_level(LEVEL).regions), [(1, 5, 3, 0, 2, 4)])
+        self.assertEqual(solutions(parse_level(LEVEL).regions), [(1, 5, 3, 0, 2, 4)])
 
     def test_bad_shape(self):
         with self.assertRaises(LevelError):
@@ -123,35 +125,28 @@ class GameTest(unittest.TestCase):
     def test_forced_cell(self):
         g = new_game()
         self.assertIsNone(g.forced_cell())
-        for c in (0, 2, 3, 4):  # row A: only columns 1 and 5 left
-            g.toggle_mark(0, c)
-        self.assertIsNone(g.forced_cell())
-        g.toggle_mark(0, 5)
-        # Row A is down to A2, but marking A6 also left region B with only B6,
-        # and regions come first.
+        g.toggle_mark(0, 5)  # region B: (0,5), (1,5) → only B6 left
         self.assertEqual(g.forced_cell(), (1, 5))
+
+    def test_forced_cell_ignores_rows_and_columns(self):
+        g = new_game()
+        for c in range(1, 6):  # row A is down to A1, but region A still has three cells
+            g.toggle_mark(0, c)
+        g.toggle_mark(1, 5)  # and region B (A6, B6) is fully marked, so nothing qualifies
+        self.assertIsNone(g.forced_cell())
 
     def test_forced_cell_reading_order_and_guesses(self):
         g = new_game()
-        for c in range(1, 6):  # row F: only F1 left
-            g.toggle_mark(5, c)
+        # Region F: (3,5), (4,5), (5,4), (5,5). Guess (3,5): guesses don't count as marks.
+        g.toggle_mark(4, 5)
+        g.toggle_mark(5, 4)
         g.guess_mode = True
-        for c in range(1, 6):  # row E: guesses don't count as marks
-            g.toggle_mark(4, c)
-        self.assertEqual(g.forced_cell(), (5, 0))
+        g.toggle_mark(3, 5)
+        self.assertIsNone(g.forced_cell())
         g.guess_mode = False
-        for c in range(1, 6):  # region F is down to D6: a region beats rows E and F
-            g.toggle_mark(4, c)
-        self.assertEqual(g.forced_cell(), (3, 5))
-
-    def test_forced_cell_prefers_regions(self):
-        g = new_game()
-        for c in range(1, 6):  # row C: only C1 left (a row deduction)
-            g.toggle_mark(2, c)
-        # Region F: (3,5), (4,5), (5,4), (5,5) — leave only (5,5), later in reading order.
-        for cell in [(3, 5), (4, 5), (5, 4)]:
-            g.toggle_mark(*cell)
-        self.assertEqual(g.forced_cell(), (5, 5))
+        g.toggle_mark(3, 5)  # promote to a mark: F is down to F6
+        g.toggle_mark(0, 5)  # region B down to B6, earlier in reading order
+        self.assertEqual(g.forced_cell(), (1, 5))
 
     def test_forced_cell_skips_solved_units(self):
         g = new_game()
@@ -306,6 +301,16 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(marked(g), {(0, 0)})
         g.undo()
         self.assertEqual(marked(g), {(0, 0), (1, 1), (2, 2)})
+
+
+class GeneratorTest(unittest.TestCase):
+    def test_generated_levels_are_unique_and_logical(self):
+        rng = random.Random(1)
+        for n in (6, 7, 8):
+            p = generate(n, rng)
+            self.assertEqual(solutions(p.regions), [p.solution])
+            self.assertTrue(logic_solvable(p.regions))
+            self.assertEqual(parse_level(format_level(p)), p)
 
 
 class StoreTest(unittest.TestCase):

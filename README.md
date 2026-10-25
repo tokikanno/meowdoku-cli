@@ -16,6 +16,7 @@ pipx install .
 meowdoku               # 主選單
 meowdoku 10            # pack 10 的選關畫面
 meowdoku 10 42         # 直接玩 pack 10 第 42 關
+meowdoku --random 10    # 現場產生一題 10×10
 meowdoku --file level.txt
 ```
 

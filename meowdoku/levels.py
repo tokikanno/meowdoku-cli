@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from .model import Puzzle
-from .solver import solve
+from .solver import solutions
 
 BUNDLE_URL = 'https://raw.githubusercontent.com/plko/meowdoku/main/levels/bundle/'
 PACK_ORDER = ['6', '7', '8', '9', '10', '11', '12', 'hard', 'bad']
@@ -40,7 +40,7 @@ def parse_level(text):
         if ln.startswith('#') and 'solution:' in ln:
             solution = tuple(int(x) for x in ln.split('solution:', 1)[1].split())
     if solution is None:
-        found = solve(regions)
+        found = solutions(regions, limit=1)
         if not found:
             raise LevelError('這個盤面無解')
         solution = found[0]

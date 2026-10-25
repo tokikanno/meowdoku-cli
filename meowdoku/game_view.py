@@ -11,7 +11,7 @@ from .term import (CTRL_G, CTRL_R, CTRL_X, ENTER, ESC, MOVES, SHIFT_MOVES, Scree
                    fmt_time, log_key, text_width)
 
 # Every symbol is 2 columns wide and every cell an even width, so all of them center.
-SYMBOLS = {EMPTY: '', MARK: '❌', GUESS: '❓', CAT: '🐱', WRONG: '💥'}
+SYMBOLS = {EMPTY: '', MARK: '◾', GUESS: '❔', CAT: '🐱', WRONG: '💥'}
 SYMBOLS_ASCII = {EMPTY: '', MARK: 'x', GUESS: '?', CAT: '@', WRONG: '!'}
 
 # Board styles, switched with `b`:
@@ -35,7 +35,7 @@ HELP = [
     ('Space', '標記／取消標記（依模式寫入 {X} 或 {G}）'),
     ('g', '切換標記模式：無貓 {X} ↔ 猜測 {G}'),
     ('Enter', '翻開，翻錯扣一格生命'),
-    ('Enter（貓上）', '跳到下一個唯一沒標記的格子並翻開'),
+    ('Enter（貓上）', '翻開某個只剩一格沒標記的顏色'),
     ('Shift+方向鍵', '拖拽標記：起點沒標記就一路標記，有標記就一路清除'),
     ('v', '連續標記模式：移動時一路標記，再按 v 或 Esc 結束'),
     ('H / L', '同色格子中，目前格子左／右側的全部標記'),
