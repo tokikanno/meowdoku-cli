@@ -35,7 +35,7 @@ HELP = [
     ('t', '切換座標提示'),
     ('u / Ctrl-R', 'undo / redo'),
     ('r', '重新開始這一關'),
-    ('n', '下一關（結束後）'),
+    ('n', '下一關（結束後；過關後也可以按 Enter）'),
     ('Esc / m', '回到選單'),
     ('q', '離開（會先確認）'),
     ('Ctrl-X', '直接離開'),
@@ -263,7 +263,8 @@ class GameView(Screen):
         return f'  {"連續" if self.drag["sticky"] else "拖拽"}{what} '
 
     def over_keys(self):
-        keys = ['n 下一關'] if self.has_next else []
+        nxt = 'Enter/n 下一關' if self.game.won else 'n 下一關'
+        keys = [nxt] if self.has_next else []
         keys += ['r 重玩'] + (['m 選單'] if self.has_menu else []) + ['q 離開']
         return ' · '.join(keys)
 
@@ -296,7 +297,7 @@ class GameView(Screen):
             self.result = 'quit'
         elif modal in ('menu', 'restart') and yes:
             self.result = modal
-        elif modal == 'over' and key in ('n', 'r', 'm', 'q'):
+        elif modal == 'over' and (key in ('n', 'r', 'm', 'q') or key in ENTER):
             self.handle_key(key)
 
     def handle_key(self, key):
@@ -321,6 +322,10 @@ class GameView(Screen):
             self.cur = ((r + dr) % g.n, (c + dc) % g.n)  # wraps around at the edges
         elif key == ' ':
             g.toggle_mark(r, c)
+        elif key in ENTER and g.won:
+            # Enter is likely still being pressed from chaining reveals: go on.
+            if self.has_next:
+                self.result = 'next'
         elif key in ENTER:
             if g.board[r][c] == CAT:
                 # On a cat, Enter moves on to the next cell that must be a cat.
