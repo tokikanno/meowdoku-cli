@@ -1,6 +1,17 @@
 # meowdoku-cli
 
-[Meowdoku](https://github.com/plko/meowdoku/) 的終端機版本。只用 Python 3 標準函式庫（`curses`），不需要安裝任何套件。
+Meowdoku 的終端機版本。只用 Python 3 標準函式庫（`curses`），不需要安裝任何套件。
+
+![遊戲畫面](docs/screenshot.png)
+
+規則：n×n 的盤面分成 n 個顏色區塊，每一行、每一列、每個顏色都剛好有一隻貓，而且貓不能相鄰（斜角也不行）。每一關都只有唯一解。
+
+## 來源
+
+- 遊戲原型是手機遊戲 Meowdoku。因為 app 版廣告太多，[yocox/meowdoku](https://github.com/yocox/meowdoku) 做了網頁版的復刻，[plko/meowdoku](https://github.com/plko/meowdoku) 是它的 fork。
+- 這個專案是 plko/meowdoku 的終端機版。規則、關卡格式、配色、星數與難度分析的規則都參考它。
+- 關卡不包含在這個 repo 裡：第一次執行時才從 plko/meowdoku 的 `levels/bundle/` 下載，並用 sha256 驗證。
+- 隨機出題的出題器（`meowdoku/generator.py`）移植自上游的 `tools/generate.py`。推理檢查器則依照上游難度分析器的規則重新實作。
 
 ## 安裝
 
