@@ -31,15 +31,15 @@ NBSP = '\u00a0'
 CHROME_H = 7  # header + column labels above the board, gap + 4 footer lines below
 
 HELP = [
-    ('方向鍵 / hjkl', '移動，到邊界從另一邊出現'),
+    ('方向鍵', '移動，到邊界從另一邊出現'),
     ('Space', '標記／取消標記（依模式寫入 {X} 或 {G}）'),
     ('g', '切換標記模式：無貓 {X} ↔ 猜測 {G}'),
     ('Enter', '翻開，翻錯扣一格生命'),
     ('Enter（貓上）', '翻開某個只剩一格沒標記的顏色'),
     ('Shift+方向鍵', '拖拽標記：起點沒標記就一路標記，有標記就一路清除'),
     ('v', '連續標記模式：移動時一路標記，再按 v 或 Esc 結束'),
-    ('H / L', '同色格子中，目前格子左／右側的全部標記'),
-    ('K / J', '同色格子中，目前格子上／下方的全部標記'),
+    ('h / l', '同色格子中，目前格子左／右側的全部標記'),
+    ('k / j', '同色格子中，目前格子上／下方的全部標記'),
     ('s', '同色剩下的格子都在同一行／列時，標記推得出的格子；只剩一格時直接翻開'),
     ('Ctrl-G', '清除所有猜測 {G}'),
     (':', '跳到指定格子：字母 + 數字，例如 c5'),
@@ -87,7 +87,7 @@ def line_code(y, n):
     v = y % (1 << (n - 1))
     return v << 1 | bin(v).count('1') & 1
 
-BATCH_SIDES = {'H': (0, -1), 'L': (0, 1), 'K': (-1, 0), 'J': (1, 0)}
+BATCH_SIDES = {'h': (0, -1), 'l': (0, 1), 'k': (-1, 0), 'j': (1, 0)}
 
 
 class GameView(Screen):
@@ -325,7 +325,7 @@ class GameView(Screen):
         else:
             self.put(y, x, f'貓 {g.cats}/{g.n}')
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
-        self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  HJKL 同色批次  s 輔助  : 跳轉',
+        self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  hjkl 同色批次  s 輔助  : 跳轉',
                  curses.A_DIM)
         self.put(y + 3, x, f'r 重來  b 畫法  {"f 收藏  " if self.on_favorite else ""}'
                            f'{"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',

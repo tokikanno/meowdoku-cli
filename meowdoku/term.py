@@ -36,7 +36,6 @@ SHIFT_ARROW_SEQS = {'[1;2A': curses.KEY_SR, '[1;2B': curses.KEY_SF,
 MOVES = {
     curses.KEY_UP: (-1, 0), curses.KEY_DOWN: (1, 0),
     curses.KEY_LEFT: (0, -1), curses.KEY_RIGHT: (0, 1),
-    'k': (-1, 0), 'j': (1, 0), 'h': (0, -1), 'l': (0, 1),
 }
 
 
