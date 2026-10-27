@@ -6,7 +6,7 @@ import random
 
 from .game_view import GameView
 from .generator import format_level, generate_from_seed, new_seed, seed_code
-from .levels import Favorites, LevelError, parse_level
+from .levels import FAV, Favorites, LevelError, parse_level
 from .menu import LevelMenu, MainMenu, pack_label
 from .model import Game
 from .term import Colors, Screen
@@ -61,6 +61,8 @@ class App:
 
     def level_menu(self, pack):
         while True:
+            if not self.store.count(pack):
+                return 'back'  # the last favorite was just removed
             choice = LevelMenu(self.scr, self.colors, self.store, self.progress, pack).run()
             if choice in ('back', 'quit'):
                 return choice
@@ -80,10 +82,14 @@ class App:
     def play_pack(self, pack, idx):
         """Play levels of `pack` in order from `idx`. Returns 'menu' or 'quit'."""
         while True:
-            result = self.play_one(pack, idx, f'{pack_label(pack)} #{idx}',
-                                   has_next=idx < self.store.count(pack))
+            later = [i for i in self.store.ids(pack) if i > idx]
+            result = self.play_one(pack, idx, f'{pack_label(pack)} #{idx}', has_next=bool(later))
             if result == 'next':
-                idx += 1
+                # Re-read: a favorite removed during the level is no longer there.
+                later = [i for i in self.store.ids(pack) if i > idx]
+                if not later:
+                    return 'menu'
+                idx = later[0]
             elif result != 'restart':
                 return result
 
@@ -92,8 +98,10 @@ class App:
         idx = None
         while True:
             if idx is None:
-                count = self.store.count(pack)
-                idx = random.choice(self.progress.unsolved(pack, count) or range(1, count + 1))
+                ids = self.store.ids(pack)
+                if not ids:
+                    return 'menu'
+                idx = random.choice(self.progress.unsolved(pack, ids) or ids)
             result = self.play_one(pack, idx, f'隨機 · {pack_label(pack)} #{idx}', has_next=True)
             if result == 'next':
                 idx = None
@@ -106,9 +114,12 @@ class App:
         except LevelError as e:
             self.error(str(e))
             return 'menu'
-        notes = [] if pack == 'fav' else [f'source: {pack_label(pack)} #{idx}']
-        return self.run_level(puzzle, pack, idx, title, has_next,
-                              on_win=lambda stars, secs: self.progress.record(pack, idx, stars, secs),
+        notes = [] if pack == FAV else [f'source: {pack_label(pack)} #{idx}']
+
+        def on_win(stars, secs):
+            if self.exists(pack, idx):
+                self.progress.record(pack, idx, stars, secs)
+        return self.run_level(puzzle, pack, idx, title, has_next, on_win=on_win,
                               best_time=self.progress.best_time(pack, idx),
                               on_favorite=self.favorite(puzzle, notes))
 
@@ -143,18 +154,26 @@ class App:
                 return result
 
     def favorite(self, puzzle, notes=()):
-        """The `f` key's action for `puzzle`: save it to the favorites, once."""
-        def add():
+        """The `f` key's action for `puzzle`: add it to the favorites, or remove it
+        (with its stars, time and save) if it's there already."""
+        def toggle():
             favorites = self.favorites
             found = favorites.find(puzzle)
-            if found:
-                return f'已經在收藏裡了（第 {found} 關）'
             try:
+                if found:
+                    favorites.remove(found)
+                    if self.progress:
+                        self.progress.forget(FAV, found)
+                    return f'已從收藏移除（第 {found} 關），再按 f 可以加回來'
                 idx, path = favorites.add(format_level(puzzle, notes))
             except OSError as e:
                 return f'收藏失敗：{e}'
             return f'已收藏為第 {idx} 關（{path.parent.name}/{path.name}）'
-        return add
+        return toggle
+
+    def exists(self, pack, idx):
+        """False for a favorite removed while it was being played."""
+        return pack != FAV or idx in self.favorites.ids()
 
     def run_level(self, puzzle, pack, idx, title, has_next, on_win=None, best_time=None, extra=None,
                   on_favorite=None):
@@ -168,7 +187,9 @@ class App:
                         best_time=best_time, resumed=game is not None, on_favorite=on_favorite)
         result = view.run()
         # Keep an unfinished level for next time; a restart or an ending clears it.
-        if view.game.over or result == 'restart' or not view.game.undo_stack:
+        if not self.exists(pack, idx):
+            pass  # removed from the favorites while playing: nothing to keep
+        elif view.game.over or result == 'restart' or not view.game.undo_stack:
             self.progress.drop_save(pack, idx)
         else:
             state = dict(view.game.to_dict(), elapsed=view.elapsed(), **(extra or {}))

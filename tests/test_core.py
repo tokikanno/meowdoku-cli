@@ -341,7 +341,7 @@ class FavoritesTest(unittest.TestCase):
     def test_add_find_load(self):
         with tempfile.TemporaryDirectory() as d:
             fav = Favorites(Path(d) / 'favorites')
-            self.assertEqual(fav.count(), 0)
+            self.assertEqual(fav.ids(), [])
             puzzle = parse_level(LEVEL)
             self.assertIsNone(fav.find(puzzle))
             idx, path = fav.add(format_level(puzzle, ['seed: 6-0000002a']))
@@ -355,13 +355,31 @@ class FavoritesTest(unittest.TestCase):
             with self.assertRaises(LevelError):
                 fav.load(3)
 
-    def test_numbers_continue_after_a_gap(self):
+    def test_remove_keeps_ids(self):
         with tempfile.TemporaryDirectory() as d:
             fav = Favorites(d)
-            fav.add(LEVEL)
-            fav.add(LEVEL)
-            (Path(d) / '0001.txt').unlink()
-            self.assertEqual(fav.add(LEVEL)[1].name, '0003.txt')
+            other = format_level(generate(7, random.Random(1)))
+            for text in (LEVEL, other, LEVEL):
+                fav.add(text)
+            fav.remove(1)
+            self.assertEqual(fav.ids(), [2, 3])
+            self.assertEqual(fav.load(2), parse_level(other))
+            with self.assertRaises(LevelError):
+                fav.load(1)
+            self.assertEqual(fav.add(LEVEL)[0], 4)
+
+    def test_forget(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Progress(Path(d) / 'progress.json')
+            p.record('fav', 2, 3, 10.0)
+            p.record('fav', 3, 1, 20.0)
+            p.put_save('fav', 2, {'board': []})
+            p.set_last('fav', 2)
+            p.forget('fav', 2)
+            p = Progress(Path(d) / 'progress.json')
+            self.assertEqual((p.get('fav', 2), p.best_time('fav', 2), p.get_save('fav', 2)), (0, None, None))
+            self.assertEqual(p.get('fav', 3), 1)
+            self.assertEqual(p.last, {})
 
 
 class StoreTest(unittest.TestCase):
@@ -399,8 +417,8 @@ class ProgressTest(unittest.TestCase):
             p.set_last('8', 3)
             p = Progress(path)  # reload from disk
             self.assertEqual(p.get('8', 3), 2)
-            self.assertEqual(p.cleared('8'), 1)
-            self.assertEqual(p.unsolved('8', 4), [1, 2, 4])
+            self.assertEqual(p.cleared('8', range(1, 5)), 1)
+            self.assertEqual(p.unsolved('8', range(1, 5)), [1, 2, 4])
             self.assertEqual(p.last, {'pack': '8', 'level': 3})
 
     def test_times_and_saves(self):

@@ -48,7 +48,7 @@ class MainMenu(Screen):
                 rows.append(f'隨機出題：‹ {self.gen_size}×{self.gen_size} ›')
             elif self.store.has(item):
                 count = self.store.count(item)
-                done = self.progress.cleared(item)
+                done = self.progress.cleared(item, self.store.ids(item))
                 label = pack_label(item)
                 rows.append(f'{label}{" " * (10 - text_width(label))}{done:>5} / {count}')
             else:
@@ -108,13 +108,15 @@ class LevelMenu(Screen):
         super().__init__(scr, colors)
         self.pack = pack
         self.progress = progress
-        self.count = store.count(pack)
+        self.ids = store.ids(pack)  # level numbers; the favorites' may have gaps
+        self.count = len(self.ids)
         if initial is None:
             # Start at the first unsolved level from where the player left off.
             last = progress.last.get('level', 1) if progress.last.get('pack') == pack else 1
-            unsolved = progress.unsolved(pack, self.count)
+            unsolved = progress.unsolved(pack, self.ids)
             initial = next((i for i in unsolved if i >= last), unsolved[0] if unsolved else 1)
-        self.sel = initial
+        # sel and the grid count positions (1…count); ids[pos - 1] is the level shown.
+        self.sel = self.ids.index(initial) + 1 if initial in self.ids else 1
         self.typed = ''  # digits typed so far, for jumping to a level number
         self.top = 0  # first visible grid row
 
@@ -131,16 +133,17 @@ class LevelMenu(Screen):
         x0 = max(0, (w - cols * self.ENTRY_W) // 2)
         r_sel = (self.sel - 1) // cols
         self.top = min(max(self.top, r_sel - rows + 1), r_sel)
-        done = self.progress.cleared(self.pack)
+        done = self.progress.cleared(self.pack, self.ids)
         self.put(0, x0, f'{pack_label(self.pack)}   已通關 {done} / {self.count}', curses.A_BOLD)
         for gr in range(rows):
             for gc in range(cols):
-                idx = (self.top + gr) * cols + gc + 1
-                if idx > self.count:
+                pos = (self.top + gr) * cols + gc + 1
+                if pos > self.count:
                     break
+                idx = self.ids[pos - 1]
                 stars = self.progress.get(self.pack, idx)
                 attr = self.colors.stars[stars] if stars else 0
-                if idx == self.sel:
+                if pos == self.sel:
                     attr = curses.A_REVERSE | (attr & ~curses.A_COLOR)
                 self.put(2 + gr, x0 + gc * self.ENTRY_W, f'{idx:>4}', attr)
                 if stars:
@@ -166,17 +169,19 @@ class LevelMenu(Screen):
             if key == CTRL_X:
                 return 'quit'
             if isinstance(key, str) and key.isdigit():
-                if len(self.typed) < len(str(self.count)):
+                if len(self.typed) < len(str(self.ids[-1])):
                     self.typed += key
             elif key in (curses.KEY_BACKSPACE, '\x7f', '\b'):
                 self.typed = self.typed[:-1]
             elif key in ENTER:
                 if not self.typed:
-                    return ('play', self.sel)
-                if 1 <= int(self.typed) <= self.count:
-                    self.sel = int(self.typed)
-                else:
+                    return ('play', self.ids[self.sel - 1])
+                if int(self.typed) in self.ids:
+                    self.sel = self.ids.index(int(self.typed)) + 1
+                elif self.ids == list(range(1, self.count + 1)):
                     self.show_toast(f'只有第 1～{self.count} 關')
+                else:
+                    self.show_toast(f'沒有第 {int(self.typed)} 關')
                 self.typed = ''
             elif key == ESC and self.typed:
                 self.typed = ''

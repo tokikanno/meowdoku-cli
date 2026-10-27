@@ -103,6 +103,12 @@ class LevelStore:
         known = [p for p in PACK_ORDER if p in self.manifest]
         return known + sorted(set(self.manifest) - set(known))
 
+    def ids(self, pack):
+        """Level numbers of `pack`, ascending: 1…count, or the favorites' ids."""
+        if pack == FAV:
+            return self.favorites.ids()
+        return list(range(1, self.count(pack) + 1))
+
     def has(self, pack):
         return pack in self.manifest or pack == FAV
 
@@ -145,34 +151,38 @@ def data_dir():
 
 
 class Favorites:
-    """Saved levels, one `level_*.txt`-format file each in `favorites/`, numbered in
-    the order they were added (0001.txt, 0002.txt, …). Level k is the k-th file, so
-    deleting a file by hand renumbers the ones after it."""
+    """Saved levels, one `level_*.txt`-format file each in `favorites/`, named by a
+    number given when it was added (0001.txt, 0002.txt, …). That number is the
+    level's id for good: removing a level leaves a gap rather than renumbering the
+    rest, so stars and saves stay with their level."""
 
     def __init__(self, path=None):
         self.dir = Path(path) if path else data_dir() / 'favorites'
 
-    def files(self):
+    def _paths(self):
         try:
-            return sorted(p for p in self.dir.glob('*.txt') if p.is_file())
+            return {int(p.stem): p for p in self.dir.glob('*.txt') if p.stem.isdigit() and p.is_file()}
         except OSError:
-            return []
+            return {}
+
+    def ids(self):
+        return sorted(self._paths())
 
     def count(self):
-        return len(self.files())
+        return len(self._paths())
 
     def load(self, idx):
-        files = self.files()
-        if not 1 <= idx <= len(files):
-            raise LevelError(f'收藏只有第 1～{len(files)} 關')
+        path = self._paths().get(idx)
+        if path is None:
+            raise LevelError(f'收藏裡沒有第 {idx} 關')
         try:
-            return parse_level(files[idx - 1].read_text(encoding='utf-8'))
+            return parse_level(path.read_text(encoding='utf-8'))
         except OSError as e:
-            raise LevelError(f'無法讀取 {files[idx - 1]}：{e}')
+            raise LevelError(f'無法讀取 {path}：{e}')
 
     def find(self, puzzle):
-        """Number of the favorite with this board, or None."""
-        for idx, path in enumerate(self.files(), 1):
+        """Id of the favorite with this board, or None."""
+        for idx, path in sorted(self._paths().items()):
             try:
                 if parse_level(path.read_text(encoding='utf-8')).regions == puzzle.regions:
                     return idx
@@ -181,13 +191,17 @@ class Favorites:
         return None
 
     def add(self, text):
-        """Save a level (its `level_*.txt` text); returns (number, path)."""
-        files = self.files()
-        last = max((int(p.stem) for p in files if p.stem.isdigit()), default=0)
-        path = self.dir / f'{last + 1:04d}.txt'
+        """Save a level (its `level_*.txt` text); returns (id, path)."""
+        idx = max(self._paths(), default=0) + 1
+        path = self.dir / f'{idx:04d}.txt'
         self.dir.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding='utf-8')
-        return len(files) + 1, path
+        return idx, path
+
+    def remove(self, idx):
+        path = self._paths().get(idx)
+        if path is not None:
+            path.unlink()
 
 
 class Progress:
@@ -238,12 +252,20 @@ class Progress:
         if self.saves.pop(f'{pack}:{idx}', None) is not None:
             self.save()
 
-    def cleared(self, pack):
-        prefix = f'{pack}:'
-        return sum(1 for k in self.stars if k.startswith(prefix))
+    def cleared(self, pack, ids):
+        return sum(1 for i in ids if f'{pack}:{i}' in self.stars)
 
-    def unsolved(self, pack, count):
-        return [i for i in range(1, count + 1) if f'{pack}:{i}' not in self.stars]
+    def unsolved(self, pack, ids):
+        return [i for i in ids if f'{pack}:{i}' not in self.stars]
+
+    def forget(self, pack, idx):
+        """Drop everything kept for a level that no longer exists."""
+        key = f'{pack}:{idx}'
+        for table in (self.stars, self.times, self.saves):
+            table.pop(key, None)
+        if self.last == {'pack': pack, 'level': idx}:
+            self.last = {}
+        self.save()
 
     def save(self):
         try:

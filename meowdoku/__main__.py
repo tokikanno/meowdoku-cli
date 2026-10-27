@@ -43,7 +43,9 @@ def main(argv=None):
                 raise LevelError('還沒有收藏任何關卡：遊戲中按 f 收藏')
             elif args.level is None:
                 start = ('pack', args.pack)
-            elif not 1 <= args.level <= store.count(args.pack):
+            elif args.level not in store.ids(args.pack):
+                if args.pack == 'fav':
+                    raise LevelError(f'收藏裡沒有第 {args.level} 關')
                 raise LevelError(f'pack {args.pack} 只有第 1～{store.count(args.pack)} 關')
             else:
                 start = ('play', args.pack, args.level)
