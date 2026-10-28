@@ -291,7 +291,7 @@ class Screen:
         if self.toast:
             left = self.toast[1] - time.monotonic()
             if left <= 0:
-                self.toast = None
+                self.close_overlay()
                 return None
             self.scr.timeout(max(1, int(left * 1000)))
         elif self.tick:
@@ -312,8 +312,19 @@ class Screen:
             key = self.read_escape()
             if key is None:
                 return None
-        self.toast = None
+        if self.toast:
+            self.close_overlay()
         return key
+
+    def close_overlay(self):
+        """Drop the toast, and repaint the whole screen on the next refresh.
+
+        A box drawn over half of a wide character (◾, 🐱) makes the terminal blank
+        the whole character while ncurses still believes half of it is there; once
+        the box is gone, ncurses repaints only what it thinks changed, leaving pieces
+        of the box behind and shifting cells. Forgetting what's on screen avoids that."""
+        self.toast = None
+        self.scr.redrawwin()
 
     def read_escape(self):
         """After a bare ESC: ESC itself, a Shift+arrow key, or None for a sequence we ignore.

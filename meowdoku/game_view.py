@@ -382,6 +382,7 @@ class GameView(Screen):
 
     def handle_modal(self, key):
         modal, self.modal = self.modal, None
+        self.scr.redrawwin()  # the box is gone: see Screen.close_overlay
         yes = key in ('y', 'Y')
         if modal == 'quit' and yes:
             self.result = 'quit'
