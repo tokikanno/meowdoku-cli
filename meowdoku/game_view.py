@@ -48,6 +48,7 @@ HELP = [
     ('b', '切換盤面畫法：框線版 → 全格線版 → 色塊版'),
     ('u / Ctrl-R', 'undo / redo'),
     ('f', '收藏這一關（主選單的「收藏」可以再玩）；已收藏就取消'),
+    ('p', '暫停：停止計時並遮住盤面，按任意鍵繼續'),
     ('r', '重新開始這一關'),
     ('n', '下一關（結束後；過關後也可以按 Enter）'),
     ('Esc / m', '回到選單'),
@@ -108,7 +109,7 @@ class GameView(Screen):
         self.symbols = SYMBOLS_ASCII if ascii else SYMBOLS
         self.hearts = ('*', '.') if ascii else ('♥', '♡')
         self.cur = (0, 0)
-        self.modal = None  # None | 'help' | 'quit' | 'menu' | 'restart' | 'over'
+        self.modal = None  # None | 'help' | 'quit' | 'menu' | 'restart' | 'over' | 'pause'
         self.drag = None  # {'target': state painted, 'sticky': True for v mode}
         self.prompt = None  # text typed after ':', while jumping
         self.result = None
@@ -118,15 +119,25 @@ class GameView(Screen):
         # one was already running, so it carries on at once.
         self.clock_start = None
         self.clock_stop = None  # frozen total once the level is over
+        self.paused_clock = False  # whether the clock was running when paused
         if resumed:
             self.start_clock()
         if resumed:
             self.show_toast('接續上次的進度')
 
     def start_clock(self):
-        if self.clock_start is None:
+        if self.clock_start is None and self.modal != 'pause':
             self.clock_start = time.monotonic()
             self.tick = 1.0
+
+    def pause(self):
+        """Stop the clock and hide the board, so pausing can't be used to think for free."""
+        self.paused_clock = self.clock_start is not None
+        self.clock_base = self.elapsed()
+        self.clock_start = None
+        self.tick = None
+        self.toast = None
+        self.modal = 'pause'
 
     def elapsed(self):
         if self.clock_stop is not None:
@@ -175,6 +186,9 @@ class GameView(Screen):
             return bx + ox + c * px, by + oy + r * py
 
         self.draw_header(y0, x0)
+        if self.modal == 'pause':
+            self.draw_box(['已暫停', '', '按任意鍵繼續'])
+            return
         if self.settings.get('show_coords') or self.prompt is not None:
             for c in range(n):
                 label = str(c + 1)
@@ -327,7 +341,7 @@ class GameView(Screen):
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
         self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  hjkl 同色批次  s 輔助  : 跳轉',
                  curses.A_DIM)
-        self.put(y + 3, x, f'r 重來  b 畫法  {"f 收藏  " if self.on_favorite else ""}'
+        self.put(y + 3, x, f'p 暫停  r 重來  b 畫法  {"f 收藏  " if self.on_favorite else ""}'
                            f'{"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
                  curses.A_DIM)
 
@@ -388,6 +402,8 @@ class GameView(Screen):
             self.result = 'quit'
         elif modal in ('menu', 'restart') and yes:
             self.result = modal
+        elif modal == 'pause' and self.paused_clock:
+            self.start_clock()
         elif modal == 'over' and (key in ('n', 'r', 'm', 'q', 'f') or key in ENTER):
             self.handle_key(key)
 
@@ -478,6 +494,8 @@ class GameView(Screen):
                 self.result = 'next'
             else:
                 self.show_toast('沒有下一關')
+        elif key == 'p' and not g.over:
+            self.pause()
         elif key == 'r':
             self.leave('restart')
         elif key in ('m', ESC) and self.has_menu:
