@@ -36,10 +36,9 @@ HELP = [
     ('g', '切換標記模式：無貓 {X} ↔ 猜測 {G}'),
     ('Enter', '翻開，翻錯扣一格生命'),
     ('Enter（貓上）', '翻開某個只剩一格沒標記的顏色'),
-    ('Shift+方向鍵', '拖拽標記：起點沒標記就一路標記，有標記就一路清除'),
-    ('v', '連續標記模式：移動時一路標記，再按 v 或 Esc 結束'),
-    ('h / l', '同色格子中，目前格子左／右側的全部標記'),
-    ('k / j', '同色格子中，目前格子上／下方的全部標記'),
+    ('v', '連續標記模式：移動時一路標記（起點已標記就一路清除），再按 v 或 Esc 結束'),
+    ('Shift+←／→', '同色格子中，目前格子左／右側的全部標記'),
+    ('Shift+↑／↓', '同色格子中，目前格子上／下方的全部標記'),
     ('s', '同色剩下的格子都在同一行／列時，標記推得出的格子；只剩一格時直接翻開'),
     ('Ctrl-G', '清除所有猜測 {G}'),
     (':', '跳到指定格子：字母 + 數字，例如 c5'),
@@ -88,8 +87,6 @@ def line_code(y, n):
     v = y % (1 << (n - 1))
     return v << 1 | bin(v).count('1') & 1
 
-BATCH_SIDES = {'h': (0, -1), 'l': (0, 1), 'k': (-1, 0), 'j': (1, 0)}
-
 
 class GameView(Screen):
     """Plays one level. run() returns 'quit', 'menu', 'next' or 'restart'."""
@@ -110,7 +107,7 @@ class GameView(Screen):
         self.hearts = ('*', '.') if ascii else ('♥', '♡')
         self.cur = (0, 0)
         self.modal = None  # None | 'help' | 'quit' | 'menu' | 'restart' | 'over' | 'pause'
-        self.drag = None  # {'target': state painted, 'sticky': True for v mode}
+        self.drag = None  # {'target': state painted} while v mode is on
         self.prompt = None  # text typed after ':', while jumping
         self.result = None
         self.best_time = best_time
@@ -339,7 +336,7 @@ class GameView(Screen):
         else:
             self.put(y, x, f'貓 {g.cats}/{g.n}')
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
-        self.put(y + 2, x, 'Shift+方向 拖拽  v 連續標記  hjkl 同色批次  s 輔助  : 跳轉',
+        self.put(y + 2, x, 'v 連續標記  Shift+方向 同色批次  s 輔助  : 跳轉',
                  curses.A_DIM)
         self.put(y + 3, x, f'p 暫停  r 重來  b 畫法  {"f 收藏  " if self.on_favorite else ""}'
                            f'{"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
@@ -349,7 +346,7 @@ class GameView(Screen):
         if not self.drag:
             return ''
         what = '清除' if self.drag['target'] == EMPTY else '標記'
-        return f'  {"連續" if self.drag["sticky"] else "拖拽"}{what} '
+        return f'  連續{what} '
 
     def over_keys(self):
         nxt = 'Enter/n 下一關' if self.game.won else 'n 下一關'
@@ -421,12 +418,9 @@ class GameView(Screen):
         if self.prompt is not None:
             self.handle_prompt(key)
             return
-        if key in SHIFT_MOVES:
-            self.drag_move(SHIFT_MOVES[key], sticky=False)
-            return
-        if self.drag and self.drag['sticky']:
+        if self.drag:
             if key in MOVES:
-                self.drag_move(MOVES[key], sticky=True)
+                self.drag_move(MOVES[key])
                 return
             if key in ('v', ESC):
                 self.end_drag()
@@ -452,9 +446,9 @@ class GameView(Screen):
             else:
                 self.reveal(r, c)
         elif key == 'v':
-            self.start_drag(sticky=True)
-        elif key in BATCH_SIDES:
-            g.mark_side(r, c, *BATCH_SIDES[key])
+            self.start_drag()
+        elif key in SHIFT_MOVES:
+            g.mark_side(r, c, *SHIFT_MOVES[key])
         elif key == 's':
             if g.over:
                 pass
@@ -508,23 +502,19 @@ class GameView(Screen):
     # ── drag ─────────────────────────────────────────────────────────────────
     # A drag is one open transaction in the model, so the whole stroke undoes at once.
 
-    def start_drag(self, sticky):
+    def start_drag(self):
         g = self.game
         if g.over:
             return
         r, c = self.cur
         g.begin()
-        self.drag = {'target': g.drag_target(r, c), 'sticky': sticky}
+        self.drag = {'target': g.drag_target(r, c)}
         g.drag_paint(r, c, self.drag['target'])
 
-    def drag_move(self, delta, sticky):
-        if self.drag is None or self.drag['sticky'] != sticky:
-            self.end_drag()
-            self.start_drag(sticky)
+    def drag_move(self, delta):
         n = self.game.n
         self.cur = ((self.cur[0] + delta[0]) % n, (self.cur[1] + delta[1]) % n)
-        if self.drag:
-            self.game.drag_paint(*self.cur, self.drag['target'])
+        self.game.drag_paint(*self.cur, self.drag['target'])
 
     def end_drag(self):
         if self.drag:
