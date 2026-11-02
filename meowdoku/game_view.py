@@ -438,11 +438,7 @@ class GameView(Screen):
                 self.result = 'next'
         elif key in ENTER:
             if g.board[r][c] == CAT:
-                # On a cat, Enter moves on to the next cell that must be a cat.
-                cell = g.forced_cell()
-                if cell and not g.over:  # nothing to do is silent, by design
-                    self.cur = cell
-                    self.reveal(*cell)
+                self.reveal_forced()
             else:
                 self.reveal(r, c)
         elif key == 'v':
@@ -452,6 +448,8 @@ class GameView(Screen):
         elif key == 's':
             if g.over:
                 pass
+            elif g.board[r][c] == CAT:
+                self.reveal_forced()  # chains like Enter: s again after s revealed a cat
             elif cell := g.last_open_cell(g.region(r, c)):
                 # The color's last unmarked cell: reveal it, as Enter on a cat does.
                 self.cur = cell
@@ -498,6 +496,13 @@ class GameView(Screen):
             self.modal = 'help'
         elif key == 'q':
             self.modal = 'quit'
+
+    def reveal_forced(self):
+        """On a cat, Enter (and s) moves on to the next cell that must be a cat."""
+        cell = self.game.forced_cell()
+        if cell and not self.game.over:  # nothing to do is silent, by design
+            self.cur = cell
+            self.reveal(*cell)
 
     # ── drag ─────────────────────────────────────────────────────────────────
     # A drag is one open transaction in the model, so the whole stroke undoes at once.
