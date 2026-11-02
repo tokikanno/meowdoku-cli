@@ -39,7 +39,7 @@ HELP = [
     ('v', '連續標記模式：移動時一路標記（起點已標記就一路清除），再按 v 或 Esc 結束'),
     ('Shift+←／→', '同色格子中，目前格子左／右側的全部標記'),
     ('Shift+↑／↓', '同色格子中，目前格子上／下方的全部標記'),
-    ('s', '同色剩下的格子都在同一行／列時，標記推得出的格子；只剩一格時直接翻開'),
+    ('s', '標記和同色剩下每一格都同行、同列或相鄰的格子；只剩一格時直接翻開'),
     ('Ctrl-G', '清除所有猜測 {G}'),
     (':', '跳到指定格子：字母 + 數字，例如 c5'),
     ('a', '切換翻開後自動標記'),
@@ -457,7 +457,7 @@ class GameView(Screen):
                 self.cur = cell
                 self.reveal(*cell)
             elif not g.assist(r, c):
-                self.show_toast('s 不適用：這個顏色剩下的格子不在同一行或同一列')
+                self.show_toast('s 不適用：沒有格子和這個顏色剩下的每一格都衝突')
         elif key == 'f' and self.on_favorite:
             self.show_toast(self.on_favorite(), seconds=2.5)  # long enough to read the path
         elif key == CTRL_G:

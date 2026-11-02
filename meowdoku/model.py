@@ -203,26 +203,22 @@ class Game:
         self._paint_all(cells)
 
     def assist(self, r, c):
-        """Marks implied by this region's open cells all lying on one row or column:
-        the rest of that line, plus any cell touching every open cell (which covers
-        runs of 2–3 and the C·C pattern with one marked cell between).
-        Returns False (and changes nothing) when the region doesn't qualify."""
+        """Mark every cell that clashes with each of this region's open cells (same row,
+        same column or touching), so wherever the region's cat goes, the cell can't
+        hold one. Open cells in one line lock the rest of it; cells touching them all
+        are out too. Returns False (and changes nothing) when no cell qualifies."""
         cells = self.region_cells(self.region(r, c))
         if any(self.board[i][j] == CAT for i, j in cells):
             return False
         cand = [(i, j) for i, j in cells if self.board[i][j] in (EMPTY, GUESS)]
         if len(cand) < 2:
             return False
-        if len({i for i, _ in cand}) == 1:
-            line = [(cand[0][0], j) for j in range(self.n)]
-        elif len({j for _, j in cand}) == 1:
-            line = [(i, cand[0][1]) for i in range(self.n)]
-        else:
+        out = [(i, j) for i in range(self.n) for j in range(self.n)
+               if (i, j) not in cand
+               and all(i == ci or j == cj or (abs(i - ci) <= 1 and abs(j - cj) <= 1)
+                       for ci, cj in cand)]
+        if not out:
             return False
-        out = [cell for cell in line if cell not in cand]
-        out += [(i, j) for i in range(self.n) for j in range(self.n)
-                if (i, j) not in cand
-                and all(abs(i - ci) <= 1 and abs(j - cj) <= 1 for ci, cj in cand)]
         self._paint_all(out)
         return True
 

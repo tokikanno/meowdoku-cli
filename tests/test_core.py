@@ -11,7 +11,7 @@ from meowdoku.game_view import BOX, line_code
 from meowdoku.generator import (format_level, generate, generate_from_seed, logic_solvable,
                                 parse_seed_code, seed_code)
 from meowdoku.levels import Favorites, LevelError, LevelStore, Progress, parse_level
-from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game
+from meowdoku.model import CAT, EMPTY, GUESS, MARK, WRONG, Game, Puzzle
 from meowdoku.solver import solutions
 from meowdoku.term import (REGION_COLORS, REGION_COLORS_DIM, PairPool, assign_slots,
                            hex_to_rgb)
@@ -196,6 +196,19 @@ def marked(g):
     return {(r, c) for r in range(g.n) for c in range(g.n) if g.board[r][c] != EMPTY}
 
 
+def assist_pattern(rows):
+    """Run `s` on region B of a 6×6 board whose top-left corner is `rows` (the rest is
+    A). Returns the cells marked inside `rows` and the X cells drawn there."""
+    grid = [(row + 'A' * 6)[:6] for row in rows] + ['A' * 6] * (6 - len(rows))
+    g = Game(Puzzle(6, tuple(tuple(int(ch == 'B') for ch in row) for row in grid),
+                    (0,) * 6))
+    b = next((r, c) for r, row in enumerate(grid) for c, ch in enumerate(row) if ch == 'B')
+    assert g.assist(*b)
+    xs = {(r, c) for r, row in enumerate(grid) for c, ch in enumerate(row) if ch == 'X'}
+    drawn = {(r, c) for r, row in enumerate(rows) for c in range(len(row))}
+    return marked(g) & drawn, xs
+
+
 class BatchTest(unittest.TestCase):
     def test_mark_side_right(self):
         g = new_game()
@@ -235,7 +248,7 @@ class BatchTest(unittest.TestCase):
 
     def test_assist_not_applicable(self):
         g = new_game()
-        self.assertFalse(g.assist(0, 0))  # region A has five open cells
+        self.assertFalse(g.assist(3, 1))  # region E: no cell clashes with all eight
         g.toggle_mark(0, 5)
         g.toggle_mark(1, 5)
         self.assertFalse(g.assist(0, 5))  # region B has none left
@@ -250,11 +263,24 @@ class BatchTest(unittest.TestCase):
         g.reveal(1, 5)
         self.assertIsNone(g.last_open_cell(reg))  # has its cat
 
-    def test_assist_needs_one_line(self):
+    def test_assist_off_line(self):
         g = new_game()
-        # Region F: mark (4,5) → (3,5), (5,4), (5,5) not in one line.
+        # Region F: mark (4,5) → (3,5), (5,4), (5,5) not in one line; (4,4) touches all.
         g.toggle_mark(4, 5)
-        self.assertFalse(g.assist(3, 5))
+        self.assertTrue(g.assist(3, 5))
+        self.assertEqual(marked(g), {(4, 5), (4, 4)})
+
+    def test_assist_patterns(self):
+        for rows in (['AAXBA',
+                      'ABBBX'],
+                     ['AXXBAA',
+                      'AABXXA'],
+                     ['AABXA',
+                      'AXBBA',
+                      'AAXAA']):
+            with self.subTest(rows=rows):
+                got, xs = assist_pattern(rows)
+                self.assertEqual(got, xs)
 
     def test_assist_line_lock_any_count(self):
         g = new_game()
@@ -262,8 +288,8 @@ class BatchTest(unittest.TestCase):
         for cell in [(0, 3), (0, 4), (1, 1), (1, 3), (1, 4), (3, 3), (3, 4), (4, 4)]:
             g.toggle_mark(*cell)
         before = marked(g)
-        self.assertTrue(g.assist(2, 0))
-        self.assertEqual(marked(g), before)  # the whole row is the region: nothing else
+        self.assertFalse(g.assist(2, 0))  # the whole row is the region: nothing else
+        self.assertEqual(marked(g), before)
 
     def test_assist_line_lock_marks_rest_of_column(self):
         g = new_game()
