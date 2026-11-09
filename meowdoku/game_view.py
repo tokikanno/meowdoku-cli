@@ -37,9 +37,9 @@ HELP = [
     ('Enter', '翻開，翻錯扣一格生命'),
     ('Enter（貓上）', '翻開某個只剩一格沒標記的顏色'),
     ('v', '連續標記模式：移動時一路標記（起點已標記就一路清除），再按 v 或 Esc 結束'),
-    ('Shift+←／→', '同色格子中，目前格子左／右側的全部標記'),
-    ('Shift+↑／↓', '同色格子中，目前格子上／下方的全部標記'),
-    ('s', '標記和同色剩下每一格都同行、同列或相鄰的格子；只剩一格時直接翻開'),
+    ('h/l Shift+←／→', '同色格子中，目前格子左／右側的全部標記'),
+    ('k/j Shift+↑／↓', '同色格子中，目前格子上／下方的全部標記'),
+    ('s / \\', '標記和同色剩下每一格都同行、同列或相鄰的格子；只剩一格時直接翻開'),
     ('Ctrl-G', '清除所有猜測 {G}'),
     (':', '跳到指定格子：字母 + 數字，例如 c5'),
     ('a', '切換翻開後自動標記'),
@@ -86,6 +86,8 @@ def line_code(y, n):
     differ when the cursor's brackets hide one cell's bit."""
     v = y % (1 << (n - 1))
     return v << 1 | bin(v).count('1') & 1
+
+BATCH_SIDES = {'h': (0, -1), 'l': (0, 1), 'k': (-1, 0), 'j': (1, 0)}
 
 
 class GameView(Screen):
@@ -336,7 +338,7 @@ class GameView(Screen):
         else:
             self.put(y, x, f'貓 {g.cats}/{g.n}')
         self.put(y + 1, x, 'Space 標記  Enter 翻開  g 模式  u/^R 復原/重做', curses.A_DIM)
-        self.put(y + 2, x, 'v 連續標記  Shift+方向 同色批次  s 輔助  : 跳轉',
+        self.put(y + 2, x, 'v 連續標記  Shift+方向/hjkl 同色批次  s/\\ 輔助  : 跳轉',
                  curses.A_DIM)
         self.put(y + 3, x, f'p 暫停  r 重來  b 畫法  {"f 收藏  " if self.on_favorite else ""}'
                            f'{"Esc 選單  " if self.has_menu else ""}? 說明  ^X 離開',
@@ -443,9 +445,9 @@ class GameView(Screen):
                 self.reveal(r, c)
         elif key == 'v':
             self.start_drag()
-        elif key in SHIFT_MOVES:
-            g.mark_side(r, c, *SHIFT_MOVES[key])
-        elif key == 's':
+        elif key in SHIFT_MOVES or key in BATCH_SIDES:
+            g.mark_side(r, c, *(SHIFT_MOVES.get(key) or BATCH_SIDES[key]))
+        elif key in ('s', '\\'):
             if g.over:
                 pass
             elif g.board[r][c] == CAT:
